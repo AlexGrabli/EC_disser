@@ -461,6 +461,12 @@ final_data <- final_data %>%
                             TSoil_1, TSoil_2, TSoil_3, TSoil_4, TSoil_5, TSoil_6,
                             VWC_1, VWC_2, VWC_3, VWC_4, VWC_5, VWC_6),
     by = "DateTime"
+  ) %>%
+  mutate(
+    # Усреднение температуры почвы по всем 6 датчикам
+    TSoil_avg = rowMeans(select(., TSoil_1, TSoil_2, TSoil_3, TSoil_4, TSoil_5, TSoil_6), na.rm = TRUE),
+    # Усреднение влажности почвы по всем 6 датчикам
+    VWC_avg = rowMeans(select(., VWC_1, VWC_2, VWC_3, VWC_4, VWC_5, VWC_6), na.rm = TRUE)
   )
 
 # Выбор и переименование столбцов для сохранения
@@ -529,8 +535,14 @@ output_data <- final_data %>%
     # Температура почвы по датчикам
     any_of(c("TSoil_1", "TSoil_2", "TSoil_3", "TSoil_4", "TSoil_5", "TSoil_6")),
 
+    # Среднее значение температуры почвы по всем датчикам
+    any_of(c("TSoil_avg")),
+
     # Влажность почвы по датчикам
     any_of(c("VWC_1", "VWC_2", "VWC_3", "VWC_4", "VWC_5", "VWC_6")),
+
+    # Среднее значение влажности почвы по всем датчикам
+    any_of(c("VWC_avg")),
 
     # Параметры модели Lasslop
     any_of(c("FP_alpha", "FP_beta", "FP_k", "FP_RRef", "FP_E0", "FP_GPP2000", "FP_qc"))
