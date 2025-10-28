@@ -187,10 +187,29 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
   col_reco <- pick_col(nm, c("reco_dt_u50","reco_dt_u_star","reco_u50_f","reco_u_star_f","er","reco","reco_f"))
   col_nee  <- pick_col(nm, c("nee_u50_f","nee_u_star_f","nee","fc"))
 
+  # Диагностика: какие столбцы найдены и какие данные в них
+  cat(sprintf("\n=== Диагностика build_year_df для %d ===\n", year))
+  cat(sprintf("  Найденные столбцы:\n"))
+  cat(sprintf("    GPP:  %s\n", ifelse(is.na(col_gpp), "НЕ НАЙДЕН", col_gpp)))
+  cat(sprintf("    Reco: %s\n", ifelse(is.na(col_reco), "НЕ НАЙДЕН", col_reco)))
+  cat(sprintf("    NEE:  %s\n", ifelse(is.na(col_nee), "НЕ НАЙДЕН", col_nee)))
+
+  if (!is.na(col_gpp)) {
+    cat(sprintf("  Сырые значения GPP (первые 5): %s\n", paste(head(raw[[col_gpp]], 5), collapse=", ")))
+    cat(sprintf("  Тип столбца GPP: %s\n", class(raw[[col_gpp]])[1]))
+  }
+
   GPP  <- if (!is.na(col_gpp))  to_num(raw[[col_gpp]])  else rep(NA_real_, nrow(raw))
   Reco <- if (!is.na(col_reco)) to_num(raw[[col_reco]]) else rep(NA_real_, nrow(raw))
   NEE  <- if (!is.na(col_nee))  to_num(raw[[col_nee]])  else Reco - GPP
   if (all(is.na(NEE)) && any(is.finite(GPP)) && any(is.finite(Reco))) NEE <- Reco - GPP
+
+  # Диагностика после преобразования
+  cat(sprintf("  После to_num:\n"))
+  cat(sprintf("    GPP:  NA=%d, not-NA=%d, первые 5: %s\n",
+              sum(is.na(GPP)), sum(!is.na(GPP)), paste(head(GPP, 5), collapse=", ")))
+  cat(sprintf("    Reco: NA=%d, not-NA=%d\n", sum(is.na(Reco)), sum(!is.na(Reco))))
+  cat(sprintf("    NEE:  NA=%d, not-NA=%d\n", sum(is.na(NEE)), sum(!is.na(NEE))))
 
   out <- tibble(
     Year = year,
