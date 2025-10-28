@@ -435,10 +435,23 @@ cat("Шаг 9: Извлечение и сохранение результато
 filled_data <- EProc$sExportData()
 results <- EProc$sExportResults()
 
+# Проверка имен столбцов
+cat("  Проверка имен столбцов...\n")
+time_col_name <- names(filled_data)[1]
+cat(paste("  Столбец времени:", time_col_name, "\n"))
+
 # Объединение данных
 final_data <- cbind(filled_data, results) %>%
-  as_tibble() %>%
-  rename(DateTime = sDateTime) %>%
+  as_tibble()
+
+# Переименование столбца времени, если необходимо
+if (time_col_name != "DateTime") {
+  final_data <- final_data %>%
+    rename(DateTime = !!time_col_name)
+}
+
+# Заполнение параметров модели
+final_data <- final_data %>%
   tidyr::fill(starts_with("FP_"), .direction = "downup")
 
 # Добавление дополнительных переменных
