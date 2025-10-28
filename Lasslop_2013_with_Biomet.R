@@ -151,7 +151,28 @@ safe_numeric <- function(x) {
   result
 }
 
+# Диагностика: проверяем наличие ключевых столбцов
+cat("  Проверка столбцов в eddy_data:\n")
+key_cols <- c("date", "time", "co2_flux", "LE", "H", "Ustar", "qc_co2_flux", "qc_LE", "qc_H")
+for (col in key_cols) {
+  if (col %in% names(eddy_data)) {
+    sample_val <- eddy_data[[col]][1]
+    cat(paste("    ✓", col, "- присутствует, пример значения:", sample_val, "\n"))
+  } else {
+    cat(paste("    ✗", col, "- ОТСУТСТВУЕТ!\n"))
+  }
+}
+cat("\n")
+
 # Преобразование EddyPro данных
+cat("  Преобразование данных...\n")
+
+# Сначала проверим сырые значения перед преобразованием
+cat("  Проверка сырых значений:\n")
+cat(paste("    co2_flux: первые 5 значений:", paste(head(eddy_data$co2_flux, 5), collapse=", "), "\n"))
+cat(paste("    LE: первые 5 значений:", paste(head(eddy_data$LE, 5), collapse=", "), "\n"))
+cat(paste("    H: первые 5 значений:", paste(head(eddy_data$H, 5), collapse=", "), "\n"))
+
 data_eddy <- eddy_data %>%
   mutate(
     # Создание временной метки (локальное время)
@@ -160,6 +181,10 @@ data_eddy <- eddy_data %>%
     DateTime = ymd_hm(paste(date, time)),
 
     # Основные потоки
+    NEE_raw = co2_flux,  # Сохраняем сырые значения для диагностики
+    LE_raw = LE,
+    H_raw = H,
+
     NEE = safe_numeric(co2_flux),
     LE = safe_numeric(LE),
     H = safe_numeric(H),
@@ -173,7 +198,16 @@ data_eddy <- eddy_data %>%
     qc_NEE = safe_numeric(qc_co2_flux),
     qc_LE = safe_numeric(qc_LE),
     qc_H = safe_numeric(qc_H)
-  ) %>%
+  )
+
+# Диагностика после преобразования
+cat("  Статистика после safe_numeric:\n")
+cat(paste("    NEE: NA =", sum(is.na(data_eddy$NEE)), "из", nrow(data_eddy), "\n"))
+cat(paste("    LE: NA =", sum(is.na(data_eddy$LE)), "из", nrow(data_eddy), "\n"))
+cat(paste("    H: NA =", sum(is.na(data_eddy$H)), "из", nrow(data_eddy), "\n"))
+cat(paste("    Преобразованные NEE: первые 5 значений:", paste(head(data_eddy$NEE, 5), collapse=", "), "\n"))
+
+data_eddy <- data_eddy %>%
   # Применение QC флагов
   mutate(
     NEE = ifelse(qc_NEE == 2, NA, NEE),
@@ -191,7 +225,11 @@ data_eddy <- eddy_data %>%
   distinct(DateTime, .keep_all = TRUE) %>%
   arrange(DateTime)
 
-cat(paste("  ✓ Обработано", nrow(data_eddy), "записей EddyPro\n\n"))
+cat(paste("  ✓ Обработано", nrow(data_eddy), "записей EddyPro\n"))
+cat(paste("  Финальная статистика после фильтрации:\n"))
+cat(paste("    NEE: NA =", sum(is.na(data_eddy$NEE)), "не-NA =", sum(!is.na(data_eddy$NEE)), "\n"))
+cat(paste("    LE: NA =", sum(is.na(data_eddy$LE)), "не-NA =", sum(!is.na(data_eddy$LE)), "\n"))
+cat(paste("    H: NA =", sum(is.na(data_eddy$H)), "не-NA =", sum(!is.na(data_eddy$H)), "\n\n"))
 
 # ==============================================================================
 # 7. ПРЕОБРАЗОВАНИЕ ДАННЫХ BIOMET
