@@ -352,13 +352,13 @@ final_data <- final_data %>%
 # Добавление дополнительных переменных
 final_data <- final_data %>%
   left_join(
-    data_full %>% select(DateTime, RH, Pa),
+    data_full %>% select(DateTime, Year, DoY, RH, Pa),
     by = "DateTime"
   )
 
 # Статистика заполнения
 missing_after <- final_data %>%
-  select(NEE_uStar_f, GPP_DT_uStar, Reco_DT_uStar, Tair_f, LE_f, H_f, VPD_f, Rg_f, Rn_f) %>%
+  select(any_of(c("NEE_uStar_f", "GPP_DT_uStar", "Reco_DT_uStar", "Tair_f", "LE_f", "H_f", "VPD_f", "Rg_f", "Rn_f"))) %>%
   summarise(across(everything(), ~ sum(is.na(.)))) %>%
   pivot_longer(everything(), names_to = "Variable", values_to = "Missing") %>%
   mutate(Percent = round(Missing / nrow(final_data) * 100, 1))
@@ -373,73 +373,70 @@ cat("\n")
 
 cat("Шаг 10: Сохранение результатов...\n")
 
-# Выбор важных столбцов для сохранения
+# Выбор и переименование столбцов для сохранения
 output_data <- final_data %>%
   select(
     # Временные переменные
-    DateTime, Year, DoY, season,
+    DateTime,
+    any_of(c("Year", "DoY", "season")),
 
     # NEE (оригинал и заполненный)
-    NEE_orig = NEE_uStar_orig,
-    NEE_filled = NEE_uStar_f,
-    NEE_fqc = NEE_uStar_fqc,
-    NEE_fmeth = NEE_uStar_fmeth,
+    any_of(c(
+      NEE_orig = "NEE_uStar_orig",
+      NEE_filled = "NEE_uStar_f",
+      NEE_fqc = "NEE_uStar_fqc",
+      NEE_fmeth = "NEE_uStar_fmeth",
 
-    # NEE для разных сценариев u*
-    NEE_U05 = NEE_U05_f,
-    NEE_U50 = NEE_U50_f,
-    NEE_U95 = NEE_U95_f,
+      # NEE для разных сценариев u*
+      NEE_U05 = "NEE_U05_f",
+      NEE_U50 = "NEE_U50_f",
+      NEE_U95 = "NEE_U95_f",
 
-    # GPP и Reco (метод Lasslop)
-    GPP = GPP_DT_uStar,
-    GPP_SD = GPP_DT_uStar_SD,
-    GPP_U05 = GPP_DT_U05,
-    GPP_U50 = GPP_DT_U50,
-    GPP_U95 = GPP_DT_U95,
+      # GPP и Reco (метод Lasslop)
+      GPP = "GPP_DT_uStar",
+      GPP_SD = "GPP_DT_uStar_SD",
+      GPP_U05 = "GPP_DT_U05",
+      GPP_U50 = "GPP_DT_U50",
+      GPP_U95 = "GPP_DT_U95",
 
-    Reco = Reco_DT_uStar,
-    Reco_SD = Reco_DT_uStar_SD,
-    Reco_U05 = Reco_DT_U05,
-    Reco_U50 = Reco_DT_U50,
-    Reco_U95 = Reco_DT_U95,
+      Reco = "Reco_DT_uStar",
+      Reco_SD = "Reco_DT_uStar_SD",
+      Reco_U05 = "Reco_DT_U05",
+      Reco_U50 = "Reco_DT_U50",
+      Reco_U95 = "Reco_DT_U95",
 
-    # Метеорологические переменные (заполненные)
-    Tair = Tair_f,
-    Tair_qc = Tair_fqc,
-    Tsoil = Tsoil_f,
+      # Метеорологические переменные (заполненные)
+      Tair = "Tair_f",
+      Tair_qc = "Tair_fqc",
+      Tsoil = "Tsoil_f",
 
-    VPD = VPD_f,
-    VPD_qc = VPD_fqc,
+      VPD = "VPD_f",
+      VPD_qc = "VPD_fqc",
 
-    Rg = Rg_f,
-    Rg_qc = Rg_fqc,
+      Rg = "Rg_f",
+      Rg_qc = "Rg_fqc",
 
-    PPFD = PPFD_f,
-    PPFD_qc = PPFD_fqc,
+      PPFD = "PPFD_f",
+      PPFD_qc = "PPFD_fqc",
 
-    Rn = Rn_f,
-    Rn_qc = Rn_fqc,
+      Rn = "Rn_f",
+      Rn_qc = "Rn_fqc",
 
-    LE = LE_f,
-    LE_qc = LE_fqc,
+      LE = "LE_f",
+      LE_qc = "LE_fqc",
 
-    H = H_f,
-    H_qc = H_fqc,
+      H = "H_f",
+      H_qc = "H_fqc",
+
+      # Пороги u*
+      Ustar_Thresh = "Ustar_uStar_Thres"
+    )),
 
     # Дополнительные переменные
-    RH, Pa,
-
-    # Пороги u*
-    Ustar_Thresh = Ustar_uStar_Thres,
+    any_of(c("RH", "Pa")),
 
     # Параметры модели Lasslop
-    FP_alpha,      # Начальный наклон световой кривой
-    FP_beta,       # Максимальный GPP
-    FP_k,          # Параметр влияния VPD
-    FP_RRef,       # Базальное дыхание
-    FP_E0,         # Энергия активации
-    FP_GPP2000,    # GPP при PPFD = 2000
-    FP_qc          # QC флаг разделения потоков
+    any_of(c("FP_alpha", "FP_beta", "FP_k", "FP_RRef", "FP_E0", "FP_GPP2000", "FP_qc"))
   )
 
 # Сохранение в CSV

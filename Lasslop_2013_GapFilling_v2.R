@@ -467,41 +467,75 @@ final_data <- final_data %>%
 # Добавление дополнительных переменных
 final_data <- final_data %>%
   left_join(
-    data_combined %>% select(DateTime, any_of(c("RH", "Pa", "WS", "CO2"))),
+    data_combined %>% select(DateTime, Year, DoY, any_of(c("RH", "Pa", "WS", "CO2"))),
     by = "DateTime"
   )
 
 # Выбор важных столбцов
 output_data <- final_data %>%
   select(
-    DateTime, Year, DoY, any_of("season"),
+    # Временные переменные
+    DateTime,
+    any_of(c("Year", "DoY", "season")),
 
-    NEE_orig = NEE_uStar_orig,
-    NEE_filled = NEE_uStar_f,
-    any_of(c("NEE_fqc" = "NEE_uStar_fqc", "NEE_fmeth" = "NEE_uStar_fmeth")),
+    # NEE (оригинал и заполненный)
+    any_of(c(
+      NEE_orig = "NEE_uStar_orig",
+      NEE_filled = "NEE_uStar_f",
+      NEE_fqc = "NEE_uStar_fqc",
+      NEE_fmeth = "NEE_uStar_fmeth",
 
-    any_of(c("NEE_U05" = "NEE_U05_f", "NEE_U50" = "NEE_U50_f", "NEE_U95" = "NEE_U95_f")),
+      # NEE для разных сценариев u*
+      NEE_U05 = "NEE_U05_f",
+      NEE_U50 = "NEE_U50_f",
+      NEE_U95 = "NEE_U95_f",
 
-    GPP = GPP_DT_uStar,
-    any_of(c("GPP_SD" = "GPP_DT_uStar_SD")),
-    any_of(c("GPP_U05" = "GPP_DT_U05", "GPP_U50" = "GPP_DT_U50", "GPP_U95" = "GPP_DT_U95")),
+      # GPP и Reco (метод Lasslop)
+      GPP = "GPP_DT_uStar",
+      GPP_SD = "GPP_DT_uStar_SD",
+      GPP_U05 = "GPP_DT_U05",
+      GPP_U50 = "GPP_DT_U50",
+      GPP_U95 = "GPP_DT_U95",
 
-    Reco = Reco_DT_uStar,
-    any_of(c("Reco_SD" = "Reco_DT_uStar_SD")),
-    any_of(c("Reco_U05" = "Reco_DT_U05", "Reco_U50" = "Reco_DT_U50", "Reco_U95" = "Reco_DT_U95")),
+      Reco = "Reco_DT_uStar",
+      Reco_SD = "Reco_DT_uStar_SD",
+      Reco_U05 = "Reco_DT_U05",
+      Reco_U50 = "Reco_DT_U50",
+      Reco_U95 = "Reco_DT_U95",
 
-    any_of(c("Tair" = "Tair_f", "Tair_qc" = "Tair_fqc", "Tsoil" = "Tsoil_f")),
-    any_of(c("VPD" = "VPD_f", "VPD_qc" = "VPD_fqc")),
-    any_of(c("Rg" = "Rg_f", "Rg_qc" = "Rg_fqc")),
-    any_of(c("PPFD" = "PPFD_f", "PPFD_qc" = "PPFD_fqc")),
-    any_of(c("Rn" = "Rn_f", "Rn_qc" = "Rn_fqc")),
-    any_of(c("LE" = "LE_f", "LE_qc" = "LE_fqc")),
-    any_of(c("H" = "H_f", "H_qc" = "H_fqc")),
+      # Метеопеременные (заполненные)
+      Tair = "Tair_f",
+      Tair_qc = "Tair_fqc",
+      Tsoil = "Tsoil_f",
+      VPD = "VPD_f",
+      VPD_qc = "VPD_fqc",
+      Rg = "Rg_f",
+      Rg_qc = "Rg_fqc",
+      PPFD = "PPFD_f",
+      PPFD_qc = "PPFD_fqc",
+      Rn = "Rn_f",
+      Rn_qc = "Rn_fqc",
+      LE = "LE_f",
+      LE_qc = "LE_fqc",
+      H = "H_f",
+      H_qc = "H_fqc",
 
-    any_of(c("RH", "Pa", "WS", "CO2")),
+      # Дополнительные переменные
+      RH = "RH",
+      Pa = "Pa",
+      WS = "WS",
+      CO2 = "CO2",
 
-    any_of(c("Ustar_Thresh" = "Ustar_uStar_Thres")),
-    any_of(c("FP_alpha", "FP_beta", "FP_k", "FP_RRef", "FP_E0", "FP_GPP2000", "FP_qc"))
+      # Параметры u* и модели
+      Ustar_Thresh = "Ustar_uStar_Thres",
+      FP_alpha = "FP_alpha",
+      FP_beta = "FP_beta",
+      FP_k = "FP_k",
+      FP_RRef = "FP_RRef",
+      FP_E0 = "FP_E0",
+      FP_GPP2000 = "FP_GPP2000",
+      FP_qc = "FP_qc"
+    ))
   )
 
 # Сохранение

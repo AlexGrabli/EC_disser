@@ -457,86 +457,83 @@ final_data <- final_data %>%
 # Добавление дополнительных переменных
 final_data <- final_data %>%
   left_join(
-    data_combined %>% select(DateTime, RH, Pa, WS, CO2, SWC,
+    data_combined %>% select(DateTime, Year, DoY, RH, Pa, WS, CO2, SWC,
                             TSoil_1, TSoil_2, TSoil_3, TSoil_4, TSoil_5, TSoil_6,
                             VWC_1, VWC_2, VWC_3, VWC_4, VWC_5, VWC_6),
     by = "DateTime"
   )
 
-# Выбор важных столбцов для сохранения
+# Выбор и переименование столбцов для сохранения
 output_data <- final_data %>%
   select(
     # Временные переменные
-    DateTime, Year, DoY, season,
+    DateTime,
+    any_of(c("Year", "DoY", "season")),
 
     # NEE (оригинал и заполненный)
-    NEE_orig = NEE_uStar_orig,
-    NEE_filled = NEE_uStar_f,
-    NEE_fqc = NEE_uStar_fqc,
-    NEE_fmeth = NEE_uStar_fmeth,
+    any_of(c(
+      NEE_orig = "NEE_uStar_orig",
+      NEE_filled = "NEE_uStar_f",
+      NEE_fqc = "NEE_uStar_fqc",
+      NEE_fmeth = "NEE_uStar_fmeth",
 
-    # NEE для разных сценариев u*
-    NEE_U05 = NEE_U05_f,
-    NEE_U50 = NEE_U50_f,
-    NEE_U95 = NEE_U95_f,
+      # NEE для разных сценариев u*
+      NEE_U05 = "NEE_U05_f",
+      NEE_U50 = "NEE_U50_f",
+      NEE_U95 = "NEE_U95_f",
 
-    # GPP и Reco (метод Lasslop)
-    GPP = GPP_DT_uStar,
-    GPP_SD = GPP_DT_uStar_SD,
-    GPP_U05 = GPP_DT_U05,
-    GPP_U50 = GPP_DT_U50,
-    GPP_U95 = GPP_DT_U95,
+      # GPP и Reco (метод Lasslop)
+      GPP = "GPP_DT_uStar",
+      GPP_SD = "GPP_DT_uStar_SD",
+      GPP_U05 = "GPP_DT_U05",
+      GPP_U50 = "GPP_DT_U50",
+      GPP_U95 = "GPP_DT_U95",
 
-    Reco = Reco_DT_uStar,
-    Reco_SD = Reco_DT_uStar_SD,
-    Reco_U05 = Reco_DT_U05,
-    Reco_U50 = Reco_DT_U50,
-    Reco_U95 = Reco_DT_U95,
+      Reco = "Reco_DT_uStar",
+      Reco_SD = "Reco_DT_uStar_SD",
+      Reco_U05 = "Reco_DT_U05",
+      Reco_U50 = "Reco_DT_U50",
+      Reco_U95 = "Reco_DT_U95",
 
-    # Метеорологические переменные (заполненные)
-    Tair = Tair_f,
-    Tair_qc = Tair_fqc,
-    Tsoil = Tsoil_f,
-    Tsoil_qc = Tsoil_fqc,
+      # Метеорологические переменные (заполненные)
+      Tair = "Tair_f",
+      Tair_qc = "Tair_fqc",
+      Tsoil = "Tsoil_f",
+      Tsoil_qc = "Tsoil_fqc",
 
-    VPD = VPD_f,
-    VPD_qc = VPD_fqc,
+      VPD = "VPD_f",
+      VPD_qc = "VPD_fqc",
 
-    Rg = Rg_f,
-    Rg_qc = Rg_fqc,
+      Rg = "Rg_f",
+      Rg_qc = "Rg_fqc",
 
-    PPFD = PPFD_f,
-    PPFD_qc = PPFD_fqc,
+      PPFD = "PPFD_f",
+      PPFD_qc = "PPFD_fqc",
 
-    Rn = Rn_f,
-    Rn_qc = Rn_fqc,
+      Rn = "Rn_f",
+      Rn_qc = "Rn_fqc",
 
-    LE = LE_f,
-    LE_qc = LE_fqc,
+      LE = "LE_f",
+      LE_qc = "LE_fqc",
 
-    H = H_f,
-    H_qc = H_fqc,
+      H = "H_f",
+      H_qc = "H_fqc",
+
+      # Пороги u*
+      Ustar_Thresh = "Ustar_uStar_Thres"
+    )),
 
     # Дополнительные переменные
-    RH, Pa, WS, CO2, SWC,
+    any_of(c("RH", "Pa", "WS", "CO2", "SWC")),
 
     # Температура почвы по датчикам
-    TSoil_1, TSoil_2, TSoil_3, TSoil_4, TSoil_5, TSoil_6,
+    any_of(c("TSoil_1", "TSoil_2", "TSoil_3", "TSoil_4", "TSoil_5", "TSoil_6")),
 
     # Влажность почвы по датчикам
-    VWC_1, VWC_2, VWC_3, VWC_4, VWC_5, VWC_6,
-
-    # Пороги u*
-    Ustar_Thresh = Ustar_uStar_Thres,
+    any_of(c("VWC_1", "VWC_2", "VWC_3", "VWC_4", "VWC_5", "VWC_6")),
 
     # Параметры модели Lasslop
-    FP_alpha,      # Начальный наклон световой кривой
-    FP_beta,       # Максимальный GPP
-    FP_k,          # Параметр влияния VPD
-    FP_RRef,       # Базальное дыхание
-    FP_E0,         # Энергия активации
-    FP_GPP2000,    # GPP при PPFD = 2000
-    FP_qc          # QC флаг
+    any_of(c("FP_alpha", "FP_beta", "FP_k", "FP_RRef", "FP_E0", "FP_GPP2000", "FP_qc"))
   )
 
 # Сохранение
