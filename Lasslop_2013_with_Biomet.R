@@ -46,9 +46,9 @@ latitude <- 55.83722   # 55°50'14"N
 longitude <- 37.56556  # 37°33'56"E
 timezone <- 3          # MSK = UTC+3
 
-# Период данных
-start_date <- as.POSIXct("2013-04-01 21:30:00", tz = "UTC")
-end_date <- as.POSIXct("2013-09-02 00:00:00", tz = "UTC")
+# Период данных (используем локальное время без преобразования в UTC)
+start_date <- as.POSIXct("2013-04-01 21:30:00")
+end_date <- as.POSIXct("2013-09-02 00:00:00")
 
 # Параметры для оценки u*
 season_starts <- c(60, 152, 244)
@@ -154,10 +154,10 @@ safe_numeric <- function(x) {
 # Преобразование EddyPro данных
 data_eddy <- eddy_data %>%
   mutate(
-    # Создание временной метки
+    # Создание временной метки (локальное время)
     date = as.Date(date),
     time = substr(time, 1, 5),
-    DateTime = ymd_hm(paste(date, time), tz = "UTC"),
+    DateTime = ymd_hm(paste(date, time)),
 
     # Основные потоки
     NEE = safe_numeric(co2_flux),
@@ -203,8 +203,8 @@ cat("Шаг 4: Обработка данных Biomet...\n")
 data_biomet <- biomet_data %>%
   mutate(
     # Создание DateTime из DATE_1 и TIME_1
-    # Формат: DD.MM.YYYY и HH:MM:SS
-    DateTime = dmy_hms(paste(DATE_1, TIME_1), tz = "UTC"),
+    # Формат: DD.MM.YYYY и HH:MM:SS (локальное время)
+    DateTime = dmy_hms(paste(DATE_1, TIME_1)),
 
     # Метеорологические переменные
     Tair = safe_numeric(AirTC_Avg),         # Температура воздуха (°C)

@@ -49,9 +49,9 @@ latitude <- 55.83722   # 55°50'14"N
 longitude <- 37.56556  # 37°33'56"E
 timezone <- 3          # MSK = UTC+3
 
-# Период данных
-start_date <- as.POSIXct("2013-04-01 21:30:00", tz = "UTC")
-end_date <- as.POSIXct("2013-09-02 00:00:00", tz = "UTC")
+# Период данных (используем локальное время без преобразования в UTC)
+start_date <- as.POSIXct("2013-04-01 21:30:00")
+end_date <- as.POSIXct("2013-09-02 00:00:00")
 
 # Параметры для оценки u*
 season_starts <- c(60, 152, 244)  # День года начала сезонов (март, июнь, сентябрь)
@@ -111,7 +111,7 @@ data_processed <- eddy_data %>%
     # Создание временной метки
     date = as.Date(date),
     time = substr(time, 1, 5),  # Берем только HH:MM
-    DateTime = ymd_hm(paste(date, time), tz = "UTC"),
+    DateTime = ymd_hm(paste(date, time)),
 
     # Преобразование числовых переменных
     NEE = as.numeric(co2_flux),
