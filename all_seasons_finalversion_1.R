@@ -183,21 +183,82 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
   dt <- force_year(dt, year)
   if (shift_hours != 0L && any(!is.na(dt))) dt <- dt + hours(shift_hours)
 
+  # Объединенные списки поиска столбцов (из обеих веток)
   col_gpp  <- pick_col(nm, c("gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u50","gpp_u_star_f","gpp_f","gpp"))
   col_reco <- pick_col(nm, c("reco_dt_u50","reco_dt_u_star","reco_u50_f","reco_u50","reco_u_star_f","er","reco","reco_f"))
-  col_nee  <- pick_col(nm, c("nee_u50_f","nee_u50","nee_u_star_f","nee_filled", "nee","fc"))
+  col_nee  <- pick_col(nm, c("nee_u50_f","nee_u50","nee_u_star_f","nee_filled","nee","fc"))
+
+  # Добавляем поиск метеопеременных
+  col_le   <- pick_col(nm, c("le_f","le"))
+  col_h    <- pick_col(nm, c("h_f","h"))
+  col_tair <- pick_col(nm, c("tair_f","tair","air_temperature"))
+  col_vpd  <- pick_col(nm, c("vpd_f","vpd"))
+  col_rh   <- pick_col(nm, c("rh","r_h"))
+
+  # Диагностика: какие столбцы найдены и какие данные в них
+  cat(sprintf("\n=== Диагностика build_year_df для %d ===\n", year))
+  cat(sprintf("  Найденные столбцы потоков:\n"))
+  cat(sprintf("    GPP:  %s\n", ifelse(is.na(col_gpp), "НЕ НАЙДЕН", col_gpp)))
+  cat(sprintf("    Reco: %s\n", ifelse(is.na(col_reco), "НЕ НАЙДЕН", col_reco)))
+  cat(sprintf("    NEE:  %s\n", ifelse(is.na(col_nee), "НЕ НАЙДЕН", col_nee)))
+  cat(sprintf("  Найденные столбцы метео:\n"))
+  cat(sprintf("    LE:   %s\n", ifelse(is.na(col_le), "НЕ НАЙДЕН", col_le)))
+  cat(sprintf("    H:    %s\n", ifelse(is.na(col_h), "НЕ НАЙДЕН", col_h)))
+  cat(sprintf("    Tair: %s\n", ifelse(is.na(col_tair), "НЕ НАЙДЕН", col_tair)))
+  cat(sprintf("    VPD:  %s\n", ifelse(is.na(col_vpd), "НЕ НАЙДЕН", col_vpd)))
+  cat(sprintf("    RH:   %s\n", ifelse(is.na(col_rh), "НЕ НАЙДЕН", col_rh)))
+
+  if (!is.na(col_gpp)) {
+    cat(sprintf("  Сырые значения GPP (первые 5): %s\n", paste(head(raw[[col_gpp]], 5), collapse=", ")))
+    cat(sprintf("  Тип столбца GPP: %s\n", class(raw[[col_gpp]])[1]))
+  }
 
   GPP  <- if (!is.na(col_gpp))  to_num(raw[[col_gpp]])  else rep(NA_real_, nrow(raw))
   Reco <- if (!is.na(col_reco)) to_num(raw[[col_reco]]) else rep(NA_real_, nrow(raw))
   NEE  <- if (!is.na(col_nee))  to_num(raw[[col_nee]])  else Reco - GPP
   if (all(is.na(NEE)) && any(is.finite(GPP)) && any(is.finite(Reco))) NEE <- Reco - GPP
 
+  # Преобразование метеопеременных
+  LE   <- if (!is.na(col_le))   to_num(raw[[col_le]])   else rep(NA_real_, nrow(raw))
+  H    <- if (!is.na(col_h))    to_num(raw[[col_h]])    else rep(NA_real_, nrow(raw))
+  Tair <- if (!is.na(col_tair)) to_num(raw[[col_tair]]) else rep(NA_real_, nrow(raw))
+  VPD  <- if (!is.na(col_vpd))  to_num(raw[[col_vpd]])  else rep(NA_real_, nrow(raw))
+  RH   <- if (!is.na(col_rh))   to_num(raw[[col_rh]])   else rep(NA_real_, nrow(raw))
+
+  # Расчет WUE (Water Use Efficiency) = GPP / LE
+  # LE переводим из W/m2 в mmol/m2/s: LE_W / 2.45 (latent heat) / 18 (molar mass H2O) * 1000
+  # Упрощенно: WUE = GPP (µmol CO2 m-2 s-1) / (LE * 22.7) где LE в W m-2
+  # Более точно: WUE = GPP / ET, где ET = LE / lambda (lambda ~ 2.45 MJ/kg)
+  WUE <- ifelse(LE > 0 & is.finite(LE) & is.finite(GPP),
+                GPP / (LE * 0.408),  # 0.408 = 1000 / (2.45 * 1000), переводит LE(W/m2) в ET(mmol/m2/s)
+                NA_real_)
+
+  # Диагностика после преобразования
+  cat(sprintf("  После to_num:\n"))
+  cat(sprintf("    GPP:  NA=%d, not-NA=%d, первые 5: %s\n",
+              sum(is.na(GPP)), sum(!is.na(GPP)), paste(head(GPP, 5), collapse=", ")))
+  cat(sprintf("    Reco: NA=%d, not-NA=%d\n", sum(is.na(Reco)), sum(!is.na(Reco))))
+  cat(sprintf("    NEE:  NA=%d, not-NA=%d\n", sum(is.na(NEE)), sum(!is.na(NEE))))
+  cat(sprintf("    LE:   NA=%d, not-NA=%d\n", sum(is.na(LE)), sum(!is.na(LE))))
+  cat(sprintf("    H:    NA=%d, not-NA=%d\n", sum(is.na(H)), sum(!is.na(H))))
+  cat(sprintf("    Tair: NA=%d, not-NA=%d\n", sum(is.na(Tair)), sum(!is.na(Tair))))
+  cat(sprintf("    WUE:  NA=%d, not-NA=%d\n", sum(is.na(WUE)), sum(!is.na(WUE))))
+
+>>>>>>> b1b8878 (Добавлены LE, H, WUE и кумулятивные суммы в all_seasons_finalversion_1.R)
   out <- tibble(
     Year = year,
     datetime = dt,
     Date = as.Date(dt),
     HourInt = pmin(23L, pmax(0L, hour(dt))),
-    NEE = NEE, GPP = GPP, Reco = Reco
+    NEE = NEE,
+    GPP = GPP,
+    Reco = Reco,
+    LE = LE,
+    H = H,
+    Tair = Tair,
+    VPD = VPD,
+    RH = RH,
+    WUE = WUE
   )
 
   # Фазы (строго 6, без «после уборки»)
@@ -1318,3 +1379,196 @@ p_wue_year <- ggplot(wue_year, aes(Year, mn, fill = Year)) +
         panel.grid.major = element_line(linewidth=0.2, colour="grey85"))
 
 print(p_wue_year)
+ggsave("WUE_by_year_overall.png", p_wue_year, width = 8, height = 6, dpi = 300, bg = "white")
+
+# ==============================================================================
+# РАСЧЕТ КУМУЛЯТИВНЫХ СУММ ЗА ВЕГЕТАЦИОННЫЙ ПЕРИОД
+# ==============================================================================
+
+cat("\n========================================\n")
+cat("РАСЧЕТ КУМУЛЯТИВНЫХ СУММ\n")
+cat("========================================\n\n")
+
+# Функция для расчета кумулятивных сумм потоков CO2
+# Пересчитывает µmol CO2 m-2 s-1 в g CO2 m-2 за период
+# 1 µmol CO2 = 44 µg CO2, за 30 минут (1800 с)
+calculate_cumulative_fluxes <- function(df) {
+  df %>%
+    arrange(Date, HourInt) %>%
+    mutate(
+      # Пересчет в g CO2 m-2 за 30 минут
+      # µmol/m2/s * 44 (MW CO2) * 1800 s / 1e6 = g CO2/m2
+      GPP_gC = GPP * 44 * 1800 / 1e6 / 1000 * 12/44,  # g C m-2
+      Reco_gC = Reco * 44 * 1800 / 1e6 / 1000 * 12/44,
+      NEE_gC = NEE * 44 * 1800 / 1e6 / 1000 * 12/44,
+      
+      # Кумулятивные суммы
+      GPP_cum = cumsum(ifelse(is.finite(GPP_gC), GPP_gC, 0)),
+      Reco_cum = cumsum(ifelse(is.finite(Reco_gC), Reco_gC, 0)),
+      NEE_cum = cumsum(ifelse(is.finite(NEE_gC), NEE_gC, 0))
+    )
+}
+
+# Функция для расчета кумулятивных сумм активных температур
+calculate_gdd <- function(df, base_temp = 10) {
+  df %>%
+    arrange(Date, HourInt) %>%
+    group_by(Date) %>%
+    summarise(
+      Tair_mean = mean(Tair, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      # Сумма активных температур (GDD - Growing Degree Days)
+      GDD_daily = pmax(0, Tair_mean - base_temp),
+      GDD_cum = cumsum(ifelse(is.finite(GDD_daily), GDD_daily, 0))
+    )
+}
+
+# Расчет кумулятивных сумм для каждого года
+cat("Расчет кумулятивных сумм по годам...\n")
+
+df13_cum <- calculate_cumulative_fluxes(df13)
+df16_cum <- calculate_cumulative_fluxes(df16)
+df23_cum <- calculate_cumulative_fluxes(df23)
+
+# Расчет сумм активных температур
+gdd13 <- calculate_gdd(df13)
+gdd16 <- calculate_gdd(df16)
+gdd23 <- calculate_gdd(df23)
+
+# Объединение для графиков
+df_all_cum <- bind_rows(
+  df13_cum %>% mutate(Year = 2013),
+  df16_cum %>% mutate(Year = 2016),
+  df23_cum %>% mutate(Year = 2023)
+) %>%
+  mutate(Year = factor(Year))
+
+gdd_all <- bind_rows(
+  gdd13 %>% mutate(Year = 2013),
+  gdd16 %>% mutate(Year = 2016),
+  gdd23 %>% mutate(Year = 2023)
+) %>%
+  mutate(Year = factor(Year))
+
+# ==============================================================================
+# ИТОГОВЫЕ КУМУЛЯТИВНЫЕ СУММЫ ЗА ВЕГЕТАЦИОННЫЙ ПЕРИОД
+# ==============================================================================
+
+cat("\nИтоговые кумулятивные суммы за вегетационный период:\n\n")
+
+cumulative_summary <- df_all_cum %>%
+  group_by(Year) %>%
+  summarise(
+    Start_date = min(Date, na.rm = TRUE),
+    End_date = max(Date, na.rm = TRUE),
+    Days = as.numeric(End_date - Start_date) + 1,
+    
+    GPP_total_gC = max(GPP_cum, na.rm = TRUE),
+    Reco_total_gC = max(Reco_cum, na.rm = TRUE),
+    NEE_total_gC = max(NEE_cum, na.rm = TRUE),
+    
+    GPP_mean = mean(GPP, na.rm = TRUE),
+    Reco_mean = mean(Reco, na.rm = TRUE),
+    NEE_mean = mean(NEE, na.rm = TRUE),
+    
+    .groups = "drop"
+  )
+
+print(cumulative_summary)
+
+# Добавим суммы активных температур
+gdd_summary <- gdd_all %>%
+  group_by(Year) %>%
+  summarise(
+    GDD_total = max(GDD_cum, na.rm = TRUE),
+    GDD_mean = mean(GDD_daily, na.rm = TRUE),
+    Days_above_10C = sum(GDD_daily > 0, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+cat("\nСуммы активных температур (>10°C):\n\n")
+print(gdd_summary)
+
+# Объединенная таблица сравнения
+comparison_table <- cumulative_summary %>%
+  left_join(gdd_summary, by = "Year") %>%
+  select(Year, Days, GPP_total_gC, Reco_total_gC, NEE_total_gC, GDD_total, Days_above_10C)
+
+cat("\nПолная таблица сравнения:\n\n")
+print(comparison_table)
+
+# Сохранение таблицы
+write.csv(comparison_table, "cumulative_comparison_years.csv", row.names = FALSE)
+cat("\n✓ Таблица сохранена: cumulative_comparison_years.csv\n")
+
+# ==============================================================================
+# ГРАФИКИ КУМУЛЯТИВНЫХ СУММ
+# ==============================================================================
+
+cat("\nПостроение графиков кумулятивных сумм...\n")
+
+# График кумулятивного GPP
+p_gpp_cum <- ggplot(df_all_cum, aes(x = Date, y = GPP_cum, color = Year)) +
+  geom_line(linewidth = 1) +
+  scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
+  labs(title = "Кумулятивный GPP по годам",
+       x = "Дата", y = "Кумулятивный GPP (g C m⁻²)",
+       color = "Год") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+print(p_gpp_cum)
+ggsave("GPP_cumulative.png", p_gpp_cum, width = 10, height = 6, dpi = 300, bg = "white")
+
+# График кумулятивного Reco
+p_reco_cum <- ggplot(df_all_cum, aes(x = Date, y = Reco_cum, color = Year)) +
+  geom_line(linewidth = 1) +
+  scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
+  labs(title = "Кумулятивный Reco по годам",
+       x = "Дата", y = "Кумулятивный Reco (g C m⁻²)",
+       color = "Год") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+print(p_reco_cum)
+ggsave("Reco_cumulative.png", p_reco_cum, width = 10, height = 6, dpi = 300, bg = "white")
+
+# График кумулятивного NEE
+p_nee_cum <- ggplot(df_all_cum, aes(x = Date, y = NEE_cum, color = Year)) +
+  geom_line(linewidth = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+  scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
+  labs(title = "Кумулятивный NEE по годам",
+       subtitle = "Отрицательные значения = поглощение CO₂",
+       x = "Дата", y = "Кумулятивный NEE (g C m⁻²)",
+       color = "Год") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+print(p_nee_cum)
+ggsave("NEE_cumulative.png", p_nee_cum, width = 10, height = 6, dpi = 300, bg = "white")
+
+# График сумм активных температур
+p_gdd_cum <- ggplot(gdd_all, aes(x = Date, y = GDD_cum, color = Year)) +
+  geom_line(linewidth = 1) +
+  scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
+  labs(title = "Кумулятивная сумма активных температур >10°C",
+       x = "Дата", y = "Сумма активных температур (°C·день)",
+       color = "Год") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+print(p_gdd_cum)
+ggsave("GDD_cumulative.png", p_gdd_cum, width = 10, height = 6, dpi = 300, bg = "white")
+
+cat("\n✓ Все графики сохранены!\n")
+cat("\n========================================\n")
+cat("РАСЧЕТЫ ЗАВЕРШЕНЫ\n")
+cat("========================================\n")
+>>>>>>> b1b8878 (Добавлены LE, H, WUE и кумулятивные суммы в all_seasons_finalversion_1.R)
