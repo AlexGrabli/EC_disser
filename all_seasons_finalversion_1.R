@@ -183,33 +183,14 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
   dt <- force_year(dt, year)
   if (shift_hours != 0L && any(!is.na(dt))) dt <- dt + hours(shift_hours)
 
-  col_gpp  <- pick_col(nm, c("gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u_star_f","gpp_f","gpp"))
-  col_reco <- pick_col(nm, c("reco_dt_u50","reco_dt_u_star","reco_u50_f","reco_u_star_f","er","reco","reco_f"))
-  col_nee  <- pick_col(nm, c("nee_u50_f","nee_u_star_f","nee","fc"))
-
-  # Диагностика: какие столбцы найдены и какие данные в них
-  cat(sprintf("\n=== Диагностика build_year_df для %d ===\n", year))
-  cat(sprintf("  Найденные столбцы:\n"))
-  cat(sprintf("    GPP:  %s\n", ifelse(is.na(col_gpp), "НЕ НАЙДЕН", col_gpp)))
-  cat(sprintf("    Reco: %s\n", ifelse(is.na(col_reco), "НЕ НАЙДЕН", col_reco)))
-  cat(sprintf("    NEE:  %s\n", ifelse(is.na(col_nee), "НЕ НАЙДЕН", col_nee)))
-
-  if (!is.na(col_gpp)) {
-    cat(sprintf("  Сырые значения GPP (первые 5): %s\n", paste(head(raw[[col_gpp]], 5), collapse=", ")))
-    cat(sprintf("  Тип столбца GPP: %s\n", class(raw[[col_gpp]])[1]))
-  }
+  col_gpp  <- pick_col(nm, c("gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u50","gpp_u_star_f","gpp_f","gpp"))
+  col_reco <- pick_col(nm, c("reco_dt_u50","reco_dt_u_star","reco_u50_f","reco_u50","reco_u_star_f","er","reco","reco_f"))
+  col_nee  <- pick_col(nm, c("nee_u50_f","nee_u50","nee_u_star_f","nee_filled", "nee","fc"))
 
   GPP  <- if (!is.na(col_gpp))  to_num(raw[[col_gpp]])  else rep(NA_real_, nrow(raw))
   Reco <- if (!is.na(col_reco)) to_num(raw[[col_reco]]) else rep(NA_real_, nrow(raw))
   NEE  <- if (!is.na(col_nee))  to_num(raw[[col_nee]])  else Reco - GPP
   if (all(is.na(NEE)) && any(is.finite(GPP)) && any(is.finite(Reco))) NEE <- Reco - GPP
-
-  # Диагностика после преобразования
-  cat(sprintf("  После to_num:\n"))
-  cat(sprintf("    GPP:  NA=%d, not-NA=%d, первые 5: %s\n",
-              sum(is.na(GPP)), sum(!is.na(GPP)), paste(head(GPP, 5), collapse=", ")))
-  cat(sprintf("    Reco: NA=%d, not-NA=%d\n", sum(is.na(Reco)), sum(!is.na(Reco))))
-  cat(sprintf("    NEE:  NA=%d, not-NA=%d\n", sum(is.na(NEE)), sum(!is.na(NEE))))
 
   out <- tibble(
     Year = year,
@@ -257,13 +238,13 @@ readr::write_csv(
 )
 
 # ----------------------- Загрузка 2013/2016 и сборка -----------------------
-f2013 <- "eddyproc_partitioned_2013.csv"
+f2013 <- "Lasslop_2013_Complete_GapFilled.csv"
 f2016 <- "Moscow_2016_verFin.csv"
 stopifnot(file.exists(f2013), file.exists(f2016))
 raw13 <- readr::read_csv(f2013, show_col_types = FALSE, guess_max = 1e6) |> clean_names()
 raw16 <- readr::read_csv(f2016, show_col_types = FALSE, guess_max = 1e6) |> clean_names()
 
-df13 <- build_year_df(raw13, 2013, B2013, tz_in="UTC", shift_hours=3L)   # 2013: UTC→MSK
+df13 <- build_year_df(raw13, 2013, B2013, tz_in="UTC", shift_hours=0L) 
 df16 <- build_year_df(raw16, 2016, B2016, tz_in="UTC", shift_hours=0L)
 
 # Диагностика (можно закомментировать):
@@ -401,7 +382,7 @@ prep_year <- function(df, year){
   stopifnot(all(c("datetime","Phase_lab") %in% names(df)))
   nm <- names(df)
 
-  gpp_col <- pick_first_present(nm, c("GPP","gpp","gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u_star_f"))
+  gpp_col <- pick_first_present(nm, c("GPP","gpp","gpp_dt_u50","gpp_dt_u_star","gpp_u50","gpp_u_star_f"))
   if (is.na(gpp_col)) stop(sprintf("(%s) Не нашли колонку GPP в df%02d", year, year))
 
   ppfd_col <- pick_first_present(nm, c("PPFD","ppfd","PPFD_f","ppfd_f","ppfd_mean","PPFD_mean","ppfd_orig","PPFD_orig"))
@@ -536,11 +517,11 @@ attach_ppfd <- function(df, ppfd_lookup){
 
 # ---------- ПРИМЕНЕНИЕ К 2013/2016 ----------
 # укажите верные пути, если отличаются
-file_2013 <- "eddyproc_partitioned_2013.csv"
+file_2013 <- "Lasslop_2013_Complete_GapFilled.csv"
 file_2016 <- "Moscow_2016_verFin.csv"
 
 # 2013: в исходнике время было в UTC → сдвигаем к МСК +3 ч
-pp2013 <- build_ppfd_lookup(file_2013, year = 2013, tz_in = "UTC", shift_hours = 3L)
+pp2013 <- build_ppfd_lookup(file_2013, year = 2013, tz_in = "UTC", shift_hours = 0L)
 df13   <- attach_ppfd(df13, pp2013)
 
 # 2016: как правило уже локальное/UTC без сдвига
@@ -749,114 +730,6 @@ anno_fixed <- coef_tbl %>%
   ungroup()
 
 stopifnot(exists("light_all"), exists("curve_tbl"), exists("coef_tbl"))
-# 1) биннинг для «усиков»
-bin_w <- 100
-bins_tbl <- light_all %>%
-  mutate(PPFD_bin = pmax(0, floor(PPFD/bin_w)*bin_w)) %>%
-  group_by(Year, Phase_lab, PPFD_bin) %>%
-  summarise(
-    GPP_mean = mean(GPP, na.rm = TRUE),
-    GPP_se   = sd(GPP,  na.rm = TRUE) / sqrt(sum(is.finite(GPP))),
-    .groups  = "drop"
-  ) %>%
-  mutate(GPP_se = replace_na(GPP_se, 0))
-
-# 2) выбор таблиц для кривых и аннотаций (если вы делали пунктир/скрытие 2016 на «Всходах»)
-curves_df <- if (exists("curve_tbl_mod")) curve_tbl_mod else curve_tbl
-anno_df   <- if (exists("anno_fixed_mod")) anno_fixed_mod else {
-  # если нет готовых фиксированных подписей — сделаем быстро
-  y_max_fixed <- suppressWarnings(max(c(light_all$GPP, curves_df$GPP_hat), na.rm = TRUE))
-  if (!is.finite(y_max_fixed) || y_max_fixed <= 0) y_max_fixed <- 10
-  y_breaks <- pretty(c(0, y_max_fixed), n = 6)
-  y_max_fixed <- max(y_breaks)
-  fmt_num <- function(x) ifelse(is.finite(x), formatC(x, format="f", digits=2), "н/д")
-  year_levels <- c(2013, 2016, 2023)
-  top_pad  <- y_max_fixed * 0.04
-  y_step   <- max(y_max_fixed * 0.08, 1.0)
-  x_pad    <- 30
-  coef_tbl %>%
-    mutate(Year = factor(Year, levels = year_levels)) %>%
-    group_by(Phase_lab) %>%
-    arrange(Year) %>%
-    mutate(
-      x     = x_pad,
-      y     = y_max_fixed - top_pad - (row_number()-1) * y_step,
-      label = paste0("α = ", fmt_num(alpha), "  β = ", fmt_num(beta))
-    ) %>%
-    ungroup()
-}
-
-# 3) общая шкала Y, палитра и тема (если ещё не заданы)
-if (!exists("y_max_fixed") || !is.finite(y_max_fixed)) {
-  y_max_fixed <- suppressWarnings(max(c(light_all$GPP, curves_df$GPP_hat), na.rm = TRUE))
-  if (!is.finite(y_max_fixed) || y_max_fixed <= 0) y_max_fixed <- 10
-  y_breaks <- pretty(c(0, y_max_fixed), n = 6)
-  y_max_fixed <- max(y_breaks)
-}
-if (!exists("pal_year")) {
-  pal_year <- c(`2013`="#1b9e77", `2016`="#d95f02", `2023`="#7570b3")
-}
-if (!exists("theme_base")) {
-  theme_base <- theme_bw(base_size=12) +
-    theme(panel.grid.minor=element_blank(),
-          panel.grid.major=element_line(linewidth=0.2, colour="grey85"),
-          strip.background=element_rect(fill="grey95", colour="grey80"),
-          plot.title=element_text(face="bold", hjust=0),
-          legend.position="bottom")
-}
-
-# 4) сам график p_whisk (с поддержкой пунктирной линии, если есть столбец curve_style)
-p_whisk <- ggplot() +
-  geom_point(data = light_all, aes(PPFD, GPP, color = factor(Year)), alpha=0.25, size=1) +
-  geom_errorbar(data = bins_tbl,
-                aes(x = PPFD_bin + (as.numeric(factor(Year))-2)*bin_w/6,
-                    ymin = GPP_mean-1.96*GPP_se, ymax = GPP_mean+1.96*GPP_se,
-                    color=factor(Year)),
-                width = bin_w/4, alpha=0.6) +
-  geom_point(data = bins_tbl,
-             aes(x = PPFD_bin + (as.numeric(factor(Year))-2)*bin_w/6,
-                 y = GPP_mean, color=factor(Year)), size=1.6, alpha=0.8) +
-  {
-    if ("curve_style" %in% names(curves_df))
-      geom_line(data = curves_df, aes(PPFD, GPP_hat, color=factor(Year), linetype=curve_style), linewidth=1.1)
-    else
-      geom_line(data = curves_df, aes(PPFD, GPP_hat, color=factor(Year)), linewidth=1.1)
-  } +
-  geom_text(data = anno_df, aes(x=x, y=y, label=label, color=factor(Year)),
-            hjust=0, vjust=1, size=3.5, fontface="bold") +
-  facet_wrap(~Phase_lab, ncol=3, scales="fixed") +
-  scale_color_manual(values=pal_year, name="Год") +
-  {
-    if ("curve_style" %in% names(curves_df))
-      scale_linetype_manual(values = c(solid="solid", dashed="22"), guide = "none")
-    else NULL
-  } +
-  scale_y_continuous(limits = c(0, y_max_fixed), breaks = y_breaks,
-                     expand = expansion(mult = c(0, 0.02))) +
-  labs(title="Световая кривая — фазы (тренд с «усиками», общая ось Y)",
-       x="PPFD (µmol photons m⁻² s⁻¹)", y="GPP (µmol CO₂ m⁻² s⁻¹)") +
-  theme_base
-
-p_lines_only <- ggplot() +
-  geom_line(data = curve_tbl, aes(PPFD, GPP_hat, color=factor(Year)), linewidth=1.2) +
-  geom_text(data = anno_fixed, aes(x=x, y=y, label=label, color=factor(Year)),
-            hjust=0, vjust=1, size=3.7, fontface="bold") +
-  facet_wrap(~Phase_lab, ncol=3, scales="fixed") +
-  scale_color_manual(values=pal_year, name="Год") +
-  scale_y_continuous(limits = c(0, y_max_fixed), breaks = y_breaks, expand = expansion(mult = c(0, 0.02))) +
-  labs(title="Световая кривая — фазы (только тренд, общая ось Y)",
-       x="PPFD (µmol photons m⁻² s⁻¹)", y="GPP (µmol CO₂ m⁻² s⁻¹)") +
-  theme_base
-print(p_whisk); print(p_lines_pts); print(p_lines_only)
-# При необходимости сохранить:
-# ggsave("lightRG_whiskers_fixedY.png",     p_whisk,      width=12, height=8, dpi=300, bg="white")
-# ggsave("lightRG_lines_points_fixedY.png", p_lines_pts,  width=12, height=8, dpi=300, bg="white")
-# ggsave("lightRG_lines_only_fixedY.png",   p_lines_only, width=12, height=8, dpi=300, bg="white")
-
-readr::write_csv(coef_tbl %>% arrange(Phase_lab, Year), "light_response_coefficients_by_year_phase.csv")
-
-cat("\nГотово. Если после [CHK]-диагностики видите нули/NA — пришлите вывод, посмотрим, где ещё «портятся» типы.\n")
-
 
 # ================================================================
 # Сравнение световых кривых (2013, 2016, 2023) с формулой:
