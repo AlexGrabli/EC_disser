@@ -188,12 +188,12 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
   col_reco <- pick_col(nm, c("reco_dt_u50","reco_dt_u_star","reco_u50_f","reco_u50","reco_u_star_f","er","reco","reco_f"))
   col_nee  <- pick_col(nm, c("nee_u50_f","nee_u50","nee_u_star_f","nee_filled","nee","fc"))
 
-  # Добавляем поиск метеопеременных
-  col_le   <- pick_col(nm, c("LE","LE_f","le_f","le"))
-  col_h    <- pick_col(nm, c("H","H_f","h_f","h"))
-  col_tair <- pick_col(nm, c("Tair","tair_f","tair","air_temperature"))
-  col_vpd  <- pick_col(nm, c("VPD","vpd_f","vpd"))
-  col_rh   <- pick_col(nm, c("RH","rh","r_h"))
+  # Добавляем поиск метеопеременных (приоритет для _f - заполненных данных)
+  col_le   <- pick_col(nm, c("LE_f","le_f","LE","le","le_orig","le_u50_f","le_u_star_f"))
+  col_h    <- pick_col(nm, c("H_f","h_f","H","h","h_orig","h_u50_f","h_u_star_f"))
+  col_tair <- pick_col(nm, c("Tair_f","tair_f","Tair","tair","air_temperature","ta"))
+  col_vpd  <- pick_col(nm, c("VPD_f","vpd_f","VPD","vpd","vpd_orig"))
+  col_rh   <- pick_col(nm, c("RH_f","rh_f","RH","rh","r_h"))
 
   # Диагностика: какие столбцы найдены и какие данные в них
   cat(sprintf("\n=== Диагностика build_year_df для %d ===\n", year))
@@ -271,7 +271,10 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
 
 # ----------------------- 2023: d23_avg или CSV -----------------------
 if (!exists("d23_avg") && file.exists("fluxes_2023_biomass_mean.csv")) {
-  d23_avg <- readr::read_csv("fluxes_2023_biomass_mean.csv", show_col_types = FALSE) |> clean_names()
+  d23_avg <- readr::read_csv("fluxes_2023_biomass_mean.csv", show_col_types = FALSE) |>
+    clean_names()
+  # Дополнительная очистка: удаляем лидирующие/завершающие пробелы из имен столбцов
+  names(d23_avg) <- trimws(names(d23_avg))
 }
 ts23_col <- dplyr::first(intersect(c("timestamp_msk","timestamp","datetime"), names(d23_avg)))
 stopifnot(length(ts23_col) == 1)
@@ -288,11 +291,32 @@ df23 <- d23_avg %>%
     Reco = reco,
     PPFD = ppfd,
     # Добавляем метеопеременные, если они есть в данных
-    LE = if("le" %in% names(.)) le else if("LE" %in% names(.)) LE else NA_real_,
-    H = if("h" %in% names(.)) h else if("H" %in% names(.)) H else NA_real_,
-    Tair = if("tair" %in% names(.)) tair else if("Tair" %in% names(.)) Tair else NA_real_,
-    VPD = if("vpd" %in% names(.)) vpd else if("VPD" %in% names(.)) VPD else NA_real_,
-    RH = if("rh" %in% names(.)) rh else if("RH" %in% names(.)) RH else NA_real_,
+    # Учитываем варианты с суффиксом _f (filled - после gap-filling)
+    LE = if("le_f" %in% names(.)) le_f
+         else if("LE_f" %in% names(.)) LE_f
+         else if("le" %in% names(.)) le
+         else if("LE" %in% names(.)) LE
+         else NA_real_,
+    H = if("h_f" %in% names(.)) h_f
+        else if("H_f" %in% names(.)) H_f
+        else if("h" %in% names(.)) h
+        else if("H" %in% names(.)) H
+        else NA_real_,
+    Tair = if("tair_f" %in% names(.)) tair_f
+           else if("Tair_f" %in% names(.)) Tair_f
+           else if("tair" %in% names(.)) tair
+           else if("Tair" %in% names(.)) Tair
+           else NA_real_,
+    VPD = if("vpd_f" %in% names(.)) vpd_f
+          else if("VPD_f" %in% names(.)) VPD_f
+          else if("vpd" %in% names(.)) vpd
+          else if("VPD" %in% names(.)) VPD
+          else NA_real_,
+    RH = if("rh_f" %in% names(.)) rh_f
+         else if("RH_f" %in% names(.)) RH_f
+         else if("rh" %in% names(.)) rh
+         else if("RH" %in% names(.)) RH
+         else NA_real_,
     WUE = NA_real_  # Будет рассчитан позже если есть LE
   ) %>%
   select(Year, datetime, Date, HourInt, Phase_lab, NEE, GPP, Reco, PPFD,
@@ -1243,9 +1267,10 @@ prep_year_wue <- function(df, year){
   gpp_col  <- first_or_stop(df,
                             c("GPP","gpp","gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u_star_f"),
                             "GPP")
-  le_col   <- pick_first_present(nm, c("LE","LE_f","le","le_f","le_orig","le_u50_f","le_u_star_f","le_fall"))
-  vpd_col  <- pick_first_present(nm, c("VPD","vpd","vpd_f","vpd_orig","VPD_f"))
-  tair_col <- pick_first_present(nm, c("Tair","TA","ta","tair","tair_f","tair_orig","air_temp","t_air"))
+  # Приоритет для _f (filled - заполненных) данных
+  le_col   <- pick_first_present(nm, c("LE_f","le_f","LE","le","le_orig","le_u50_f","le_u_star_f","le_fall"))
+  vpd_col  <- pick_first_present(nm, c("VPD_f","vpd_f","VPD","vpd","vpd_orig"))
+  tair_col <- pick_first_present(nm, c("Tair_f","tair_f","Tair","TA","ta","tair","tair_orig","air_temp","t_air"))
 
   out <- df %>%
     transmute(
