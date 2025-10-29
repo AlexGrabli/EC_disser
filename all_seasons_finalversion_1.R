@@ -189,11 +189,11 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
   col_nee  <- pick_col(nm, c("nee_u50_f","nee_u50","nee_u_star_f","nee_filled","nee","fc"))
 
   # Добавляем поиск метеопеременных
-  col_le   <- pick_col(nm, c("le_f","le"))
-  col_h    <- pick_col(nm, c("h_f","h"))
-  col_tair <- pick_col(nm, c("tair_f","tair","air_temperature"))
-  col_vpd  <- pick_col(nm, c("vpd_f","vpd"))
-  col_rh   <- pick_col(nm, c("rh","r_h"))
+  col_le   <- pick_col(nm, c("LE","LE_f","le_f","le"))
+  col_h    <- pick_col(nm, c("H","H_f","h_f","h"))
+  col_tair <- pick_col(nm, c("Tair","tair_f","tair","air_temperature"))
+  col_vpd  <- pick_col(nm, c("VPD","vpd_f","vpd"))
+  col_rh   <- pick_col(nm, c("RH","rh","r_h"))
 
   # Диагностика: какие столбцы найдены и какие данные в них
   cat(sprintf("\n=== Диагностика build_year_df для %d ===\n", year))
@@ -1236,10 +1236,10 @@ prep_year_wue <- function(df, year){
                             c("GPP","gpp","gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u_star_f"),
                             "GPP")
   le_col   <- first_or_stop(df,
-                            c("LE_f","le","le_f","le_orig","le_u50_f","le_u_star_f","le_fall"),
+                            c("LE","LE_f","le","le_f","le_orig","le_u50_f","le_u_star_f","le_fall"),
                             "LE (латентный поток)")
   vpd_col  <- pick_first_present(nm, c("VPD","vpd","vpd_f","vpd_orig","VPD_f"))
-  tair_col <- pick_first_present(nm, c("TA","ta","tair","tair_f","tair_orig","air_temp","t_air"))
+  tair_col <- pick_first_present(nm, c("Tair","TA","ta","tair","tair_f","tair_orig","air_temp","t_air"))
 
   out <- df %>%
     transmute(
