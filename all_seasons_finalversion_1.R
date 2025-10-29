@@ -286,9 +286,17 @@ df23 <- d23_avg %>%
     NEE = nee,
     GPP = gpp,
     Reco = reco,
-    PPFD = ppfd
+    PPFD = ppfd,
+    # Добавляем метеопеременные, если они есть в данных
+    LE = if("le" %in% names(.)) le else if("LE" %in% names(.)) LE else NA_real_,
+    H = if("h" %in% names(.)) h else if("H" %in% names(.)) H else NA_real_,
+    Tair = if("tair" %in% names(.)) tair else if("Tair" %in% names(.)) Tair else NA_real_,
+    VPD = if("vpd" %in% names(.)) vpd else if("VPD" %in% names(.)) VPD else NA_real_,
+    RH = if("rh" %in% names(.)) rh else if("RH" %in% names(.)) RH else NA_real_,
+    WUE = NA_real_  # Будет рассчитан позже если есть LE
   ) %>%
-  select(Year, datetime, Date, HourInt, Phase_lab, NEE, GPP, Reco, PPFD)
+  select(Year, datetime, Date, HourInt, Phase_lab, NEE, GPP, Reco, PPFD,
+         LE, H, Tair, VPD, RH, WUE)
 
 readr::write_csv(
   df23 %>%
@@ -1235,9 +1243,7 @@ prep_year_wue <- function(df, year){
   gpp_col  <- first_or_stop(df,
                             c("GPP","gpp","gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u_star_f"),
                             "GPP")
-  le_col   <- first_or_stop(df,
-                            c("LE","LE_f","le","le_f","le_orig","le_u50_f","le_u_star_f","le_fall"),
-                            "LE (латентный поток)")
+  le_col   <- pick_first_present(nm, c("LE","LE_f","le","le_f","le_orig","le_u50_f","le_u_star_f","le_fall"))
   vpd_col  <- pick_first_present(nm, c("VPD","vpd","vpd_f","vpd_orig","VPD_f"))
   tair_col <- pick_first_present(nm, c("Tair","TA","ta","tair","tair_f","tair_orig","air_temp","t_air"))
 
@@ -1247,7 +1253,7 @@ prep_year_wue <- function(df, year){
       datetime  = as.POSIXct(datetime, tz = "UTC"),
       Phase_lab = factor(Phase_lab, levels = PHASE6_RU),
       GPP  = safe_num(.data[[gpp_col]]),          # μmol CO2 m-2 s-1
-      LE   = safe_num(.data[[le_col]]),           # W m-2
+      LE   = if (!is.na(le_col))   safe_num(.data[[le_col]])   else NA_real_,  # W m-2
       VPD  = if (!is.na(vpd_col))  safe_num(.data[[vpd_col]])  else NA_real_,  # kPa
       Tair = if (!is.na(tair_col)) safe_num(.data[[tair_col]]) else NA_real_   # °C
     ) %>%
