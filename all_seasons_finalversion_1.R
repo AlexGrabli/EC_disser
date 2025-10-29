@@ -306,9 +306,9 @@ df23 <- d23_avg %>%
   mutate(datetime = as.POSIXct(datetime)) %>%
   # Присоединяем метеоданные
   left_join(
-    d23_meteo %>% select(datetime,
-                        LE_f, H_f, Tair_f, VPD_f,
-                        Rg_f, Rn_f, PPFD_f),
+    d23_meteo %>% select(datetime, 
+                        le_f, h_f, tair_f, vpd_f,
+                        rg_f, rn_f, ppfd_f),
     by = "datetime"
   ) %>%
   mutate(
@@ -321,10 +321,10 @@ df23 <- d23_avg %>%
     Reco = reco,
     PPFD = ppfd,
     # Метеопеременные из второго файла (приоритет для _f)
-    LE = LE_f,
-    H = H_f,
-    Tair = Tair_f,
-    VPD = VPD_f,
+    LE = le_f,
+    H = h_f,
+    Tair = tair_f,
+    VPD = vpd_f,
     RH = NA_real_,  # RH нет в метеофайле
     WUE = NA_real_  # Будет рассчитан позже
   ) %>%
@@ -423,9 +423,9 @@ print(p_NEE); print(p_GPP); print(p_Reco)
 
 # ----------------------- Сохранение результатов -----------------------
 readr::write_csv(diu, "diurnal_summary_2013_2016_2023.csv")
-ggsave("compare_diurnal_NEE_2013_2016_2023.png",  p_NEE,  width=12, height=8, dpi=300, bg="white")
-ggsave("compare_diurnal_GPP_2013_2016_2023.png",  p_GPP,  width=12, height=8, dpi=300, bg="white")
-ggsave("compare_diurnal_Reco_2013_2016_2023.png", p_Reco, width=12, height=8, dpi=300, bg="white")
+#ggsave("compare_diurnal_NEE_2013_2016_2023.png",  p_NEE,  width=12, height=8, dpi=300, bg="white")
+#ggsave("compare_diurnal_GPP_2013_2016_2023.png",  p_GPP,  width=12, height=8, dpi=300, bg="white")
+#ggsave("compare_diurnal_Reco_2013_2016_2023.png", p_Reco, width=12, height=8, dpi=300, bg="white")
 
 cat("\nГотово. Файлы сохранены:\n  - diurnal_summary_2013_2016_2023.csv\n  - compare_diurnal_*.png\n")
 
@@ -1370,7 +1370,7 @@ p_wue_phase <- ggplot(wue_phase, aes(x = Year, y = mn, fill = Year)) +
         strip.background  = element_rect(fill="grey95", colour="grey80"))
 
 print(p_wue_phase)
-ggsave("WUE_by_phase_bar.png", p_wue_phase, width = 12, height = 8, dpi = 300, bg = "white")
+#ggsave("WUE_by_phase_bar.png", p_wue_phase, width = 12, height = 8, dpi = 300, bg = "white")
 
 # ----- (опционально) IWUE, если есть VPD -----
 if (nrow(iwue_phase) > 0) {
@@ -1426,7 +1426,7 @@ p_wue_year <- ggplot(wue_year, aes(Year, mn, fill = Year)) +
         panel.grid.major = element_line(linewidth=0.2, colour="grey85"))
 
 print(p_wue_year)
-ggsave("WUE_by_year_overall.png", p_wue_year, width = 8, height = 6, dpi = 300, bg = "white")
+#ggsave("WUE_by_year_overall.png", p_wue_year, width = 8, height = 6, dpi = 300, bg = "white")
 
 # ==============================================================================
 # РАСЧЕТ КУМУЛЯТИВНЫХ СУММ ЗА ВЕГЕТАЦИОННЫЙ ПЕРИОД
@@ -1568,7 +1568,7 @@ p_gpp_cum <- ggplot(df_all_cum, aes(x = Date, y = GPP_cum, color = Year)) +
         panel.grid.minor = element_blank())
 
 print(p_gpp_cum)
-ggsave("GPP_cumulative.png", p_gpp_cum, width = 10, height = 6, dpi = 300, bg = "white")
+#ggsave("GPP_cumulative.png", p_gpp_cum, width = 10, height = 6, dpi = 300, bg = "white")
 
 # График кумулятивного Reco
 p_reco_cum <- ggplot(df_all_cum, aes(x = Date, y = Reco_cum, color = Year)) +
@@ -1582,7 +1582,7 @@ p_reco_cum <- ggplot(df_all_cum, aes(x = Date, y = Reco_cum, color = Year)) +
         panel.grid.minor = element_blank())
 
 print(p_reco_cum)
-ggsave("Reco_cumulative.png", p_reco_cum, width = 10, height = 6, dpi = 300, bg = "white")
+#ggsave("Reco_cumulative.png", p_reco_cum, width = 10, height = 6, dpi = 300, bg = "white")
 
 # График кумулятивного NEE
 p_nee_cum <- ggplot(df_all_cum, aes(x = Date, y = NEE_cum, color = Year)) +
@@ -1598,7 +1598,7 @@ p_nee_cum <- ggplot(df_all_cum, aes(x = Date, y = NEE_cum, color = Year)) +
         panel.grid.minor = element_blank())
 
 print(p_nee_cum)
-ggsave("NEE_cumulative.png", p_nee_cum, width = 10, height = 6, dpi = 300, bg = "white")
+#ggsave("NEE_cumulative.png", p_nee_cum, width = 10, height = 6, dpi = 300, bg = "white")
 
 # График сумм активных температур
 p_gdd_cum <- ggplot(gdd_all, aes(x = Date, y = GDD_cum, color = Year)) +
@@ -1612,7 +1612,7 @@ p_gdd_cum <- ggplot(gdd_all, aes(x = Date, y = GDD_cum, color = Year)) +
         panel.grid.minor = element_blank())
 
 print(p_gdd_cum)
-ggsave("GDD_cumulative.png", p_gdd_cum, width = 10, height = 6, dpi = 300, bg = "white")
+#ggsave("GDD_cumulative.png", p_gdd_cum, width = 10, height = 6, dpi = 300, bg = "white")
 
 cat("\n✓ Все графики сохранены!\n")
 cat("\n========================================\n")
