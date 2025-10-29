@@ -244,7 +244,6 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
   cat(sprintf("    Tair: NA=%d, not-NA=%d\n", sum(is.na(Tair)), sum(!is.na(Tair))))
   cat(sprintf("    WUE:  NA=%d, not-NA=%d\n", sum(is.na(WUE)), sum(!is.na(WUE))))
 
->>>>>>> b1b8878 (Добавлены LE, H, WUE и кумулятивные суммы в all_seasons_finalversion_1.R)
   out <- tibble(
     Year = year,
     datetime = dt,
@@ -1619,4 +1618,3 @@ cat("\n✓ Все графики сохранены!\n")
 cat("\n========================================\n")
 cat("РАСЧЕТЫ ЗАВЕРШЕНЫ\n")
 cat("========================================\n")
->>>>>>> b1b8878 (Добавлены LE, H, WUE и кумулятивные суммы в all_seasons_finalversion_1.R)
