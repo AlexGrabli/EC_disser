@@ -288,9 +288,9 @@ if (file.exists(meteo_file_2023)) {
   ) |> clean_names()
   names(d23_meteo) <- trimws(names(d23_meteo))
 
-  # Приводим timestamp к POSIXct
+  # Приводим timestamp к POSIXct (формат: dd.mm.yyyy HH:MM)
   d23_meteo <- d23_meteo %>%
-    mutate(datetime = as.POSIXct(timestamp, tz = "UTC"))
+    mutate(datetime = dmy_hm(timestamp))
 
   cat("  ✓ Загружено", nrow(d23_meteo), "строк метеоданных\n")
 } else {
@@ -304,7 +304,7 @@ stopifnot(length(ts23_col) == 1)
 # Объединяем два датасета по времени
 df23 <- d23_avg %>%
   rename(datetime = !!rlang::sym(ts23_col)) %>%
-  mutate(datetime = as.POSIXct(datetime, tz = "UTC")) %>%
+  mutate(datetime = as.POSIXct(datetime)) %>%
   # Присоединяем метеоданные
   left_join(
     d23_meteo %>% select(datetime,
