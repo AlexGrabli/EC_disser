@@ -269,18 +269,49 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
   out
 }
 
-# ----------------------- 2023: d23_avg или CSV -----------------------
+# ----------------------- 2023: объединение двух файлов -----------------------
+# Файл 1: потоки CO2 и биомасса
 if (!exists("d23_avg") && file.exists("fluxes_2023_biomass_mean.csv")) {
   d23_avg <- readr::read_csv("fluxes_2023_biomass_mean.csv", show_col_types = FALSE) |>
     clean_names()
-  # Дополнительная очистка: удаляем лидирующие/завершающие пробелы из имен столбцов
   names(d23_avg) <- trimws(names(d23_avg))
 }
+
+# Файл 2: метеоданные с gap-filling
+meteo_file_2023 <- "ИТОГ2_BarleyFilledAllScen_65p_biom_thrash_new2505.csv"
+if (file.exists(meteo_file_2023)) {
+  cat("Загрузка метеоданных 2023 из:", meteo_file_2023, "\n")
+  d23_meteo <- readr::read_delim(
+    meteo_file_2023,
+    delim = ";",
+    show_col_types = FALSE
+  ) |> clean_names()
+  names(d23_meteo) <- trimws(names(d23_meteo))
+
+  # Приводим timestamp к POSIXct
+  d23_meteo <- d23_meteo %>%
+    mutate(datetime = as.POSIXct(timestamp, tz = "UTC"))
+
+  cat("  ✓ Загружено", nrow(d23_meteo), "строк метеоданных\n")
+} else {
+  stop(paste("ОШИБКА: Файл с метеоданными 2023 не найден:", meteo_file_2023))
+}
+
+# Определяем временной столбец в d23_avg
 ts23_col <- dplyr::first(intersect(c("timestamp_msk","timestamp","datetime"), names(d23_avg)))
 stopifnot(length(ts23_col) == 1)
 
+# Объединяем два датасета по времени
 df23 <- d23_avg %>%
   rename(datetime = !!rlang::sym(ts23_col)) %>%
+  mutate(datetime = as.POSIXct(datetime, tz = "UTC")) %>%
+  # Присоединяем метеоданные
+  left_join(
+    d23_meteo %>% select(datetime,
+                        LE_f, H_f, Tair_f, VPD_f,
+                        Rg_f, Rn_f, PPFD_f),
+    by = "datetime"
+  ) %>%
   mutate(
     Year = 2023L,
     Date = as.Date(datetime),
@@ -290,37 +321,23 @@ df23 <- d23_avg %>%
     GPP = gpp,
     Reco = reco,
     PPFD = ppfd,
-    # Добавляем метеопеременные, если они есть в данных
-    # Учитываем варианты с суффиксом _f (filled - после gap-filling)
-    LE = if("le_f" %in% names(.)) le_f
-         else if("LE_f" %in% names(.)) LE_f
-         else if("le" %in% names(.)) le
-         else if("LE" %in% names(.)) LE
-         else NA_real_,
-    H = if("h_f" %in% names(.)) h_f
-        else if("H_f" %in% names(.)) H_f
-        else if("h" %in% names(.)) h
-        else if("H" %in% names(.)) H
-        else NA_real_,
-    Tair = if("tair_f" %in% names(.)) tair_f
-           else if("Tair_f" %in% names(.)) Tair_f
-           else if("tair" %in% names(.)) tair
-           else if("Tair" %in% names(.)) Tair
-           else NA_real_,
-    VPD = if("vpd_f" %in% names(.)) vpd_f
-          else if("VPD_f" %in% names(.)) VPD_f
-          else if("vpd" %in% names(.)) vpd
-          else if("VPD" %in% names(.)) VPD
-          else NA_real_,
-    RH = if("rh_f" %in% names(.)) rh_f
-         else if("RH_f" %in% names(.)) RH_f
-         else if("rh" %in% names(.)) rh
-         else if("RH" %in% names(.)) RH
-         else NA_real_,
-    WUE = NA_real_  # Будет рассчитан позже если есть LE
+    # Метеопеременные из второго файла (приоритет для _f)
+    LE = LE_f,
+    H = H_f,
+    Tair = Tair_f,
+    VPD = VPD_f,
+    RH = NA_real_,  # RH нет в метеофайле
+    WUE = NA_real_  # Будет рассчитан позже
   ) %>%
   select(Year, datetime, Date, HourInt, Phase_lab, NEE, GPP, Reco, PPFD,
          LE, H, Tair, VPD, RH, WUE)
+
+cat("  ✓ df23 создан:", nrow(df23), "строк\n")
+cat("  Метеоданные - NA counts:\n")
+cat("    LE:", sum(is.na(df23$LE)), "\n")
+cat("    H:", sum(is.na(df23$H)), "\n")
+cat("    Tair:", sum(is.na(df23$Tair)), "\n")
+cat("    VPD:", sum(is.na(df23$VPD)), "\n\n")
 
 readr::write_csv(
   df23 %>%
