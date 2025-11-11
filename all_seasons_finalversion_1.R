@@ -30,6 +30,11 @@ B2016 <- list(
   StemElong="2016-06-08", Heading="2016-06-22", Flowering="2016-06-30",
   Ripening="2016-08-12", Harvesting="2016-08-27"
 )
+B2023 <- list(
+  Sowing="2023-05-18", Emergence="2023-05-26", Tillering="2023-06-07",
+  StemElong="2023-06-29", Heading="2023-07-14", Flowering="2023-07-20",
+  Ripening="2023-08-06", Harvesting="2023-08-31"
+)
 
 # ----------------------- Утилиты -----------------------
 to_num <- function(x){
@@ -400,19 +405,48 @@ theme_base <- theme_bw(base_size = 12) +
 
 plot_flux <- function(flux){
   cols <- paste0(flux, c("_mean","_lwr","_upr"))
-  ggplot(diu, aes(x = HourInt, y = .data[[cols[1]]],
-                  color = factor(Year), fill = factor(Year))) +
-    geom_ribbon(aes(ymin = .data[[cols[2]]], ymax = .data[[cols[3]]]),
-                alpha = 0.14, colour = NA) +
-    geom_line(linewidth = 1) +
-    geom_point(size = 1.1) +
-    facet_wrap(~Phase_lab, ncol = 3, drop = FALSE) +
-    scale_color_manual(values = pal_year, name = "Год") +
-    scale_fill_manual(values = pal_year, guide = "none") +
-    scale_x_continuous(breaks = seq(0,23,6), limits = c(0,23), expand = c(0,0)) +
-    labs(title = paste("Diurnal —", flux),
-         x = "Час суток", y = "µmol CO₂ m⁻² s⁻¹") +
-    theme_base
+
+  # Для GPP: 2016 год на фазе Всходы показываем пунктиром
+  if (flux == "GPP") {
+    # Данные БЕЗ 2016 Всходы
+    diu_main <- diu %>% filter(!(Year == 2016 & Phase_lab == "Всходы"))
+    # Только 2016 Всходы
+    diu_dashed <- diu %>% filter(Year == 2016 & Phase_lab == "Всходы")
+
+    p <- ggplot(diu, aes(x = HourInt, y = .data[[cols[1]]],
+                    color = factor(Year), fill = factor(Year))) +
+      geom_ribbon(aes(ymin = .data[[cols[2]]], ymax = .data[[cols[3]]]),
+                  alpha = 0.14, colour = NA) +
+      # Обычные линии (все кроме 2016 Всходы)
+      geom_line(data = diu_main, linewidth = 1) +
+      geom_point(data = diu_main, size = 1.1) +
+      # Пунктирная линия для 2016 Всходы
+      geom_line(data = diu_dashed, linewidth = 1, linetype = "dashed") +
+      geom_point(data = diu_dashed, size = 1.1) +
+      facet_wrap(~Phase_lab, ncol = 3, drop = FALSE) +
+      scale_color_manual(values = pal_year, name = "Год") +
+      scale_fill_manual(values = pal_year, guide = "none") +
+      scale_x_continuous(breaks = seq(0,23,6), limits = c(0,23), expand = c(0,0)) +
+      labs(title = paste("Diurnal —", flux),
+           x = "Час суток", y = "µmol CO₂ m⁻² s⁻¹") +
+      theme_base
+  } else {
+    # Для NEE и Reco — без изменений
+    p <- ggplot(diu, aes(x = HourInt, y = .data[[cols[1]]],
+                    color = factor(Year), fill = factor(Year))) +
+      geom_ribbon(aes(ymin = .data[[cols[2]]], ymax = .data[[cols[3]]]),
+                  alpha = 0.14, colour = NA) +
+      geom_line(linewidth = 1) +
+      geom_point(size = 1.1) +
+      facet_wrap(~Phase_lab, ncol = 3, drop = FALSE) +
+      scale_color_manual(values = pal_year, name = "Год") +
+      scale_fill_manual(values = pal_year, guide = "none") +
+      scale_x_continuous(breaks = seq(0,23,6), limits = c(0,23), expand = c(0,0)) +
+      labs(title = paste("Diurnal —", flux),
+           x = "Час суток", y = "µmol CO₂ m⁻² s⁻¹") +
+      theme_base
+  }
+  return(p)
 }
 
 p_NEE  <- plot_flux("NEE")
@@ -1436,6 +1470,18 @@ cat("\n========================================\n")
 cat("РАСЧЕТ КУМУЛЯТИВНЫХ СУММ\n")
 cat("========================================\n\n")
 
+# Функция для фильтрации по вегетационному периоду
+filter_growing_season <- function(df, sowing_date, harvest_date) {
+  df %>%
+    filter(Date >= as.Date(sowing_date) & Date <= as.Date(harvest_date))
+}
+
+# Функция для добавления дней от сева
+add_days_from_sowing <- function(df, sowing_date) {
+  df %>%
+    mutate(Days_from_sowing = as.numeric(Date - as.Date(sowing_date)) + 1)
+}
+
 # Функция для расчета кумулятивных сумм потоков CO2
 # Пересчитывает µmol CO2 m-2 s-1 в g CO2 m-2 за период
 # 1 µmol CO2 = 44 µg CO2, за 30 минут (1800 с)
@@ -1448,7 +1494,7 @@ calculate_cumulative_fluxes <- function(df) {
       GPP_gC = GPP * 44 * 1800 / 1e6 / 1000 * 12/44,  # g C m-2
       Reco_gC = Reco * 44 * 1800 / 1e6 / 1000 * 12/44,
       NEE_gC = NEE * 44 * 1800 / 1e6 / 1000 * 12/44,
-      
+
       # Кумулятивные суммы
       GPP_cum = cumsum(ifelse(is.finite(GPP_gC), GPP_gC, 0)),
       Reco_cum = cumsum(ifelse(is.finite(Reco_gC), Reco_gC, 0)),
@@ -1462,6 +1508,7 @@ calculate_gdd <- function(df, base_temp = 10) {
     arrange(Date, HourInt) %>%
     group_by(Date) %>%
     summarise(
+      Days_from_sowing = first(Days_from_sowing),
       Tair_mean = mean(Tair, na.rm = TRUE),
       .groups = "drop"
     ) %>%
@@ -1473,30 +1520,53 @@ calculate_gdd <- function(df, base_temp = 10) {
 }
 
 # Расчет кумулятивных сумм для каждого года
-cat("Расчет кумулятивных сумм по годам...\n")
+cat("Расчет кумулятивных сумм по годам (только вегетационный период)...\n")
 
-df13_cum <- calculate_cumulative_fluxes(df13)
-df16_cum <- calculate_cumulative_fluxes(df16)
-df23_cum <- calculate_cumulative_fluxes(df23)
+# 2013: фильтрация + дни от сева + кумулятивные суммы
+df13_cum <- df13 %>%
+  filter_growing_season(B2013$Sowing, B2013$Harvesting) %>%
+  add_days_from_sowing(B2013$Sowing) %>%
+  calculate_cumulative_fluxes() %>%
+  mutate(Year = 2013)
 
-# Расчет сумм активных температур
-gdd13 <- calculate_gdd(df13)
-gdd16 <- calculate_gdd(df16)
-gdd23 <- calculate_gdd(df23)
+# 2016: фильтрация + дни от сева + кумулятивные суммы
+df16_cum <- df16 %>%
+  filter_growing_season(B2016$Sowing, B2016$Harvesting) %>%
+  add_days_from_sowing(B2016$Sowing) %>%
+  calculate_cumulative_fluxes() %>%
+  mutate(Year = 2016)
+
+# 2023: фильтрация + дни от сева + кумулятивные суммы
+df23_cum <- df23 %>%
+  filter_growing_season(B2023$Sowing, B2023$Harvesting) %>%
+  add_days_from_sowing(B2023$Sowing) %>%
+  calculate_cumulative_fluxes() %>%
+  mutate(Year = 2023)
+
+# Расчет сумм активных температур (только вегетационный период)
+gdd13 <- df13 %>%
+  filter_growing_season(B2013$Sowing, B2013$Harvesting) %>%
+  add_days_from_sowing(B2013$Sowing) %>%
+  calculate_gdd() %>%
+  mutate(Year = 2013)
+
+gdd16 <- df16 %>%
+  filter_growing_season(B2016$Sowing, B2016$Harvesting) %>%
+  add_days_from_sowing(B2016$Sowing) %>%
+  calculate_gdd() %>%
+  mutate(Year = 2016)
+
+gdd23 <- df23 %>%
+  filter_growing_season(B2023$Sowing, B2023$Harvesting) %>%
+  add_days_from_sowing(B2023$Sowing) %>%
+  calculate_gdd() %>%
+  mutate(Year = 2023)
 
 # Объединение для графиков
-df_all_cum <- bind_rows(
-  df13_cum %>% mutate(Year = 2013),
-  df16_cum %>% mutate(Year = 2016),
-  df23_cum %>% mutate(Year = 2023)
-) %>%
+df_all_cum <- bind_rows(df13_cum, df16_cum, df23_cum) %>%
   mutate(Year = factor(Year))
 
-gdd_all <- bind_rows(
-  gdd13 %>% mutate(Year = 2013),
-  gdd16 %>% mutate(Year = 2016),
-  gdd23 %>% mutate(Year = 2023)
-) %>%
+gdd_all <- bind_rows(gdd13, gdd16, gdd23) %>%
   mutate(Year = factor(Year))
 
 # ==============================================================================
@@ -1556,12 +1626,44 @@ cat("\n✓ Таблица сохранена: cumulative_comparison_years.csv\n"
 
 cat("\nПостроение графиков кумулятивных сумм...\n")
 
+# Подготовка меток фаз в днях от сева для вертикальных линий
+phase_lines <- tibble(
+  Year = rep(c("2013", "2016", "2023"), each = 6),
+  Phase = rep(c("Всходы", "Кущение", "Выход в трубку", "Колошение", "Цветение", "Созревание"), 3),
+  Days = c(
+    # 2013
+    as.numeric(as.Date("2013-05-12") - as.Date("2013-05-05")) + 1,  # Всходы
+    as.numeric(as.Date("2013-05-28") - as.Date("2013-05-05")) + 1,  # Кущение
+    as.numeric(as.Date("2013-06-15") - as.Date("2013-05-05")) + 1,  # Выход в трубку
+    as.numeric(as.Date("2013-06-30") - as.Date("2013-05-05")) + 1,  # Колошение
+    as.numeric(as.Date("2013-07-08") - as.Date("2013-05-05")) + 1,  # Цветение
+    as.numeric(as.Date("2013-07-22") - as.Date("2013-05-05")) + 1,  # Созревание
+    # 2016
+    as.numeric(as.Date("2016-05-18") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-05-26") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-06-08") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-06-22") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-06-30") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-08-12") - as.Date("2016-05-11")) + 1,
+    # 2023
+    as.numeric(as.Date("2023-05-26") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-06-07") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-06-29") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-07-14") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-07-20") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-08-06") - as.Date("2023-05-18")) + 1
+  )
+)
+
 # График кумулятивного GPP
-p_gpp_cum <- ggplot(df_all_cum, aes(x = Date, y = GPP_cum, color = Year)) +
-  geom_line(linewidth = 1) +
+p_gpp_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = GPP_cum, color = Year)) +
+  geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
+             linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
+  geom_line(linewidth = 1.2) +
   scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
-  labs(title = "Кумулятивный GPP по годам",
-       x = "Дата", y = "Кумулятивный GPP (g C m⁻²)",
+  labs(title = "Кумулятивный GPP по дням вегетационного периода",
+       subtitle = "Вертикальные линии — начало фенофаз",
+       x = "Дни от сева", y = "Кумулятивный GPP (g C m⁻²)",
        color = "Год") +
   theme_bw(base_size = 12) +
   theme(legend.position = "right",
@@ -1571,11 +1673,14 @@ print(p_gpp_cum)
 #ggsave("GPP_cumulative.png", p_gpp_cum, width = 10, height = 6, dpi = 300, bg = "white")
 
 # График кумулятивного Reco
-p_reco_cum <- ggplot(df_all_cum, aes(x = Date, y = Reco_cum, color = Year)) +
-  geom_line(linewidth = 1) +
+p_reco_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = Reco_cum, color = Year)) +
+  geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
+             linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
+  geom_line(linewidth = 1.2) +
   scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
-  labs(title = "Кумулятивный Reco по годам",
-       x = "Дата", y = "Кумулятивный Reco (g C m⁻²)",
+  labs(title = "Кумулятивный Reco по дням вегетационного периода",
+       subtitle = "Вертикальные линии — начало фенофаз",
+       x = "Дни от сева", y = "Кумулятивный Reco (g C m⁻²)",
        color = "Год") +
   theme_bw(base_size = 12) +
   theme(legend.position = "right",
@@ -1585,13 +1690,15 @@ print(p_reco_cum)
 #ggsave("Reco_cumulative.png", p_reco_cum, width = 10, height = 6, dpi = 300, bg = "white")
 
 # График кумулятивного NEE
-p_nee_cum <- ggplot(df_all_cum, aes(x = Date, y = NEE_cum, color = Year)) +
-  geom_line(linewidth = 1) +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+p_nee_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = NEE_cum, color = Year)) +
+  geom_hline(yintercept = 0, linetype = "solid", color = "grey50", linewidth = 0.5) +
+  geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
+             linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
+  geom_line(linewidth = 1.2) +
   scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
-  labs(title = "Кумулятивный NEE по годам",
-       subtitle = "Отрицательные значения = поглощение CO₂",
-       x = "Дата", y = "Кумулятивный NEE (g C m⁻²)",
+  labs(title = "Кумулятивный NEE по дням вегетационного периода",
+       subtitle = "Отрицательные значения = поглощение CO₂. Вертикальные линии — начало фенофаз",
+       x = "Дни от сева", y = "Кумулятивный NEE (g C m⁻²)",
        color = "Год") +
   theme_bw(base_size = 12) +
   theme(legend.position = "right",
@@ -1601,11 +1708,14 @@ print(p_nee_cum)
 #ggsave("NEE_cumulative.png", p_nee_cum, width = 10, height = 6, dpi = 300, bg = "white")
 
 # График сумм активных температур
-p_gdd_cum <- ggplot(gdd_all, aes(x = Date, y = GDD_cum, color = Year)) +
-  geom_line(linewidth = 1) +
+p_gdd_cum <- ggplot(gdd_all, aes(x = Days_from_sowing, y = GDD_cum, color = Year)) +
+  geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
+             linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
+  geom_line(linewidth = 1.2) +
   scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
   labs(title = "Кумулятивная сумма активных температур >10°C",
-       x = "Дата", y = "Сумма активных температур (°C·день)",
+       subtitle = "Вертикальные линии — начало фенофаз",
+       x = "Дни от сева", y = "Сумма активных температур (°C·день)",
        color = "Год") +
   theme_bw(base_size = 12) +
   theme(legend.position = "right",
