@@ -30,6 +30,11 @@ B2016 <- list(
   StemElong="2016-06-08", Heading="2016-06-22", Flowering="2016-06-30",
   Ripening="2016-08-12", Harvesting="2016-08-27"
 )
+B2023 <- list(
+  Sowing="2023-05-18", Emergence="2023-05-26", Tillering="2023-06-07",
+  StemElong="2023-06-29", Heading="2023-07-14", Flowering="2023-07-20",
+  Ripening="2023-08-06", Harvesting="2023-08-31"
+)
 
 # ----------------------- Утилиты -----------------------
 to_num <- function(x){
@@ -183,21 +188,81 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
   dt <- force_year(dt, year)
   if (shift_hours != 0L && any(!is.na(dt))) dt <- dt + hours(shift_hours)
 
-  col_gpp  <- pick_col(nm, c("gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u_star_f","gpp_f","gpp"))
-  col_reco <- pick_col(nm, c("reco_dt_u50","reco_dt_u_star","reco_u50_f","reco_u_star_f","er","reco","reco_f"))
-  col_nee  <- pick_col(nm, c("nee_u50_f","nee_u_star_f","nee","fc"))
+  # Объединенные списки поиска столбцов (из обеих веток)
+  col_gpp  <- pick_col(nm, c("gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u50","gpp_u_star_f","gpp_f","gpp"))
+  col_reco <- pick_col(nm, c("reco_dt_u50","reco_dt_u_star","reco_u50_f","reco_u50","reco_u_star_f","er","reco","reco_f"))
+  col_nee  <- pick_col(nm, c("nee_u50_f","nee_u50","nee_u_star_f","nee_filled","nee","fc"))
+
+  # Добавляем поиск метеопеременных (приоритет для _f - заполненных данных)
+  col_le   <- pick_col(nm, c("LE_f","le_f","LE","le","le_orig","le_u50_f","le_u_star_f"))
+  col_h    <- pick_col(nm, c("H_f","h_f","H","h","h_orig","h_u50_f","h_u_star_f"))
+  col_tair <- pick_col(nm, c("Tair_f","tair_f","Tair","tair","air_temperature","ta"))
+  col_vpd  <- pick_col(nm, c("VPD_f","vpd_f","VPD","vpd","vpd_orig"))
+  col_rh   <- pick_col(nm, c("RH_f","rh_f","RH","rh","r_h"))
+
+  # Диагностика: какие столбцы найдены и какие данные в них
+  cat(sprintf("\n=== Диагностика build_year_df для %d ===\n", year))
+  cat(sprintf("  Найденные столбцы потоков:\n"))
+  cat(sprintf("    GPP:  %s\n", ifelse(is.na(col_gpp), "НЕ НАЙДЕН", col_gpp)))
+  cat(sprintf("    Reco: %s\n", ifelse(is.na(col_reco), "НЕ НАЙДЕН", col_reco)))
+  cat(sprintf("    NEE:  %s\n", ifelse(is.na(col_nee), "НЕ НАЙДЕН", col_nee)))
+  cat(sprintf("  Найденные столбцы метео:\n"))
+  cat(sprintf("    LE:   %s\n", ifelse(is.na(col_le), "НЕ НАЙДЕН", col_le)))
+  cat(sprintf("    H:    %s\n", ifelse(is.na(col_h), "НЕ НАЙДЕН", col_h)))
+  cat(sprintf("    Tair: %s\n", ifelse(is.na(col_tair), "НЕ НАЙДЕН", col_tair)))
+  cat(sprintf("    VPD:  %s\n", ifelse(is.na(col_vpd), "НЕ НАЙДЕН", col_vpd)))
+  cat(sprintf("    RH:   %s\n", ifelse(is.na(col_rh), "НЕ НАЙДЕН", col_rh)))
+
+  if (!is.na(col_gpp)) {
+    cat(sprintf("  Сырые значения GPP (первые 5): %s\n", paste(head(raw[[col_gpp]], 5), collapse=", ")))
+    cat(sprintf("  Тип столбца GPP: %s\n", class(raw[[col_gpp]])[1]))
+  }
 
   GPP  <- if (!is.na(col_gpp))  to_num(raw[[col_gpp]])  else rep(NA_real_, nrow(raw))
   Reco <- if (!is.na(col_reco)) to_num(raw[[col_reco]]) else rep(NA_real_, nrow(raw))
   NEE  <- if (!is.na(col_nee))  to_num(raw[[col_nee]])  else Reco - GPP
   if (all(is.na(NEE)) && any(is.finite(GPP)) && any(is.finite(Reco))) NEE <- Reco - GPP
 
+  # Преобразование метеопеременных
+  LE   <- if (!is.na(col_le))   to_num(raw[[col_le]])   else rep(NA_real_, nrow(raw))
+  H    <- if (!is.na(col_h))    to_num(raw[[col_h]])    else rep(NA_real_, nrow(raw))
+  Tair <- if (!is.na(col_tair)) to_num(raw[[col_tair]]) else rep(NA_real_, nrow(raw))
+  VPD  <- if (!is.na(col_vpd))  to_num(raw[[col_vpd]])  else rep(NA_real_, nrow(raw))
+  RH   <- if (!is.na(col_rh))   to_num(raw[[col_rh]])   else rep(NA_real_, nrow(raw))
+
+  # Расчет WUE (Water Use Efficiency) = GPP / LE
+  # LE переводим из W/m2 в mmol/m2/s: LE_W / 2.45 (latent heat) / 18 (molar mass H2O) * 1000
+  # Упрощенно: WUE = GPP (µmol CO2 m-2 s-1) / (LE * 22.7) где LE в W m-2
+  # Более точно: WUE = GPP / ET, где ET = LE / lambda (lambda ~ 2.45 MJ/kg)
+  WUE <- ifelse(LE > 0 & is.finite(LE) & is.finite(GPP),
+                GPP / (LE * 0.408),  # 0.408 = 1000 / (2.45 * 1000), переводит LE(W/m2) в ET(mmol/m2/s)
+                NA_real_)
+
+  # Диагностика после преобразования
+  cat(sprintf("  После to_num:\n"))
+  cat(sprintf("    GPP:  NA=%d, not-NA=%d, первые 5: %s\n",
+              sum(is.na(GPP)), sum(!is.na(GPP)), paste(head(GPP, 5), collapse=", ")))
+  cat(sprintf("    Reco: NA=%d, not-NA=%d\n", sum(is.na(Reco)), sum(!is.na(Reco))))
+  cat(sprintf("    NEE:  NA=%d, not-NA=%d\n", sum(is.na(NEE)), sum(!is.na(NEE))))
+  cat(sprintf("    LE:   NA=%d, not-NA=%d\n", sum(is.na(LE)), sum(!is.na(LE))))
+  cat(sprintf("    H:    NA=%d, not-NA=%d\n", sum(is.na(H)), sum(!is.na(H))))
+  cat(sprintf("    Tair: NA=%d, not-NA=%d\n", sum(is.na(Tair)), sum(!is.na(Tair))))
+  cat(sprintf("    WUE:  NA=%d, not-NA=%d\n", sum(is.na(WUE)), sum(!is.na(WUE))))
+
   out <- tibble(
     Year = year,
     datetime = dt,
     Date = as.Date(dt),
     HourInt = pmin(23L, pmax(0L, hour(dt))),
-    NEE = NEE, GPP = GPP, Reco = Reco
+    NEE = NEE,
+    GPP = GPP,
+    Reco = Reco,
+    LE = LE,
+    H = H,
+    Tair = Tair,
+    VPD = VPD,
+    RH = RH,
+    WUE = WUE
   )
 
   # Фазы (строго 6, без «после уборки»)
@@ -208,15 +273,49 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
   out
 }
 
-# ----------------------- 2023: d23_avg или CSV -----------------------
+# ----------------------- 2023: объединение двух файлов -----------------------
+# Файл 1: потоки CO2 и биомасса
 if (!exists("d23_avg") && file.exists("fluxes_2023_biomass_mean.csv")) {
-  d23_avg <- readr::read_csv("fluxes_2023_biomass_mean.csv", show_col_types = FALSE) |> clean_names()
+  d23_avg <- readr::read_csv("fluxes_2023_biomass_mean.csv", show_col_types = FALSE) |>
+    clean_names()
+  names(d23_avg) <- trimws(names(d23_avg))
 }
+
+# Файл 2: метеоданные с gap-filling
+meteo_file_2023 <- "ИТОГ2_BarleyFilledAllScen_65p_biom_thrash_new2505.csv"
+if (file.exists(meteo_file_2023)) {
+  cat("Загрузка метеоданных 2023 из:", meteo_file_2023, "\n")
+  d23_meteo <- readr::read_delim(
+    meteo_file_2023,
+    delim = ";",
+    show_col_types = FALSE
+  ) |> clean_names()
+  names(d23_meteo) <- trimws(names(d23_meteo))
+
+  # Приводим timestamp к POSIXct (формат: dd.mm.yyyy HH:MM)
+  d23_meteo <- d23_meteo %>%
+    mutate(datetime = dmy_hm(timestamp))
+
+  cat("  ✓ Загружено", nrow(d23_meteo), "строк метеоданных\n")
+} else {
+  stop(paste("ОШИБКА: Файл с метеоданными 2023 не найден:", meteo_file_2023))
+}
+
+# Определяем временной столбец в d23_avg
 ts23_col <- dplyr::first(intersect(c("timestamp_msk","timestamp","datetime"), names(d23_avg)))
 stopifnot(length(ts23_col) == 1)
 
+# Объединяем два датасета по времени
 df23 <- d23_avg %>%
   rename(datetime = !!rlang::sym(ts23_col)) %>%
+  mutate(datetime = as.POSIXct(datetime)) %>%
+  # Присоединяем метеоданные
+  left_join(
+    d23_meteo %>% select(datetime, 
+                        le_f, h_f, tair_f, vpd_f,
+                        rg_f, rn_f, ppfd_f),
+    by = "datetime"
+  ) %>%
   mutate(
     Year = 2023L,
     Date = as.Date(datetime),
@@ -225,9 +324,24 @@ df23 <- d23_avg %>%
     NEE = nee,
     GPP = gpp,
     Reco = reco,
-    PPFD = ppfd
+    PPFD = ppfd,
+    # Метеопеременные из второго файла (приоритет для _f)
+    LE = le_f,
+    H = h_f,
+    Tair = tair_f,
+    VPD = vpd_f,
+    RH = NA_real_,  # RH нет в метеофайле
+    WUE = NA_real_  # Будет рассчитан позже
   ) %>%
-  select(Year, datetime, Date, HourInt, Phase_lab, NEE, GPP, Reco, PPFD)
+  select(Year, datetime, Date, HourInt, Phase_lab, NEE, GPP, Reco, PPFD,
+         LE, H, Tair, VPD, RH, WUE)
+
+cat("  ✓ df23 создан:", nrow(df23), "строк\n")
+cat("  Метеоданные - NA counts:\n")
+cat("    LE:", sum(is.na(df23$LE)), "\n")
+cat("    H:", sum(is.na(df23$H)), "\n")
+cat("    Tair:", sum(is.na(df23$Tair)), "\n")
+cat("    VPD:", sum(is.na(df23$VPD)), "\n\n")
 
 readr::write_csv(
   df23 %>%
@@ -238,13 +352,13 @@ readr::write_csv(
 )
 
 # ----------------------- Загрузка 2013/2016 и сборка -----------------------
-f2013 <- "eddyproc_partitioned_2013.csv"
+f2013 <- "Lasslop_2013_Complete_GapFilled.csv"
 f2016 <- "Moscow_2016_verFin.csv"
 stopifnot(file.exists(f2013), file.exists(f2016))
 raw13 <- readr::read_csv(f2013, show_col_types = FALSE, guess_max = 1e6) |> clean_names()
 raw16 <- readr::read_csv(f2016, show_col_types = FALSE, guess_max = 1e6) |> clean_names()
 
-df13 <- build_year_df(raw13, 2013, B2013, tz_in="UTC", shift_hours=3L)   # 2013: UTC→MSK
+df13 <- build_year_df(raw13, 2013, B2013, tz_in="UTC", shift_hours=0L) 
 df16 <- build_year_df(raw16, 2016, B2016, tz_in="UTC", shift_hours=0L)
 
 # Диагностика (можно закомментировать):
@@ -291,19 +405,48 @@ theme_base <- theme_bw(base_size = 12) +
 
 plot_flux <- function(flux){
   cols <- paste0(flux, c("_mean","_lwr","_upr"))
-  ggplot(diu, aes(x = HourInt, y = .data[[cols[1]]],
-                  color = factor(Year), fill = factor(Year))) +
-    geom_ribbon(aes(ymin = .data[[cols[2]]], ymax = .data[[cols[3]]]),
-                alpha = 0.14, colour = NA) +
-    geom_line(linewidth = 1) +
-    geom_point(size = 1.1) +
-    facet_wrap(~Phase_lab, ncol = 3, drop = FALSE) +
-    scale_color_manual(values = pal_year, name = "Год") +
-    scale_fill_manual(values = pal_year, guide = "none") +
-    scale_x_continuous(breaks = seq(0,23,6), limits = c(0,23), expand = c(0,0)) +
-    labs(title = paste("Diurnal —", flux),
-         x = "Час суток", y = "µmol CO₂ m⁻² s⁻¹") +
-    theme_base
+
+  # Для GPP: 2016 год на фазе Всходы показываем пунктиром
+  if (flux == "GPP") {
+    # Данные БЕЗ 2016 Всходы
+    diu_main <- diu %>% filter(!(Year == 2016 & Phase_lab == "Всходы"))
+    # Только 2016 Всходы
+    diu_dashed <- diu %>% filter(Year == 2016 & Phase_lab == "Всходы")
+
+    p <- ggplot(diu, aes(x = HourInt, y = .data[[cols[1]]],
+                    color = factor(Year), fill = factor(Year))) +
+      geom_ribbon(aes(ymin = .data[[cols[2]]], ymax = .data[[cols[3]]]),
+                  alpha = 0.14, colour = NA) +
+      # Обычные линии (все кроме 2016 Всходы)
+      geom_line(data = diu_main, linewidth = 1) +
+      geom_point(data = diu_main, size = 1.1) +
+      # Пунктирная линия для 2016 Всходы
+      geom_line(data = diu_dashed, linewidth = 1, linetype = "dashed") +
+      geom_point(data = diu_dashed, size = 1.1) +
+      facet_wrap(~Phase_lab, ncol = 3, drop = FALSE) +
+      scale_color_manual(values = pal_year, name = "Год") +
+      scale_fill_manual(values = pal_year, guide = "none") +
+      scale_x_continuous(breaks = seq(0,23,6), limits = c(0,23), expand = c(0,0)) +
+      labs(title = paste("Diurnal —", flux),
+           x = "Час суток", y = "µmol CO₂ m⁻² s⁻¹") +
+      theme_base
+  } else {
+    # Для NEE и Reco — без изменений
+    p <- ggplot(diu, aes(x = HourInt, y = .data[[cols[1]]],
+                    color = factor(Year), fill = factor(Year))) +
+      geom_ribbon(aes(ymin = .data[[cols[2]]], ymax = .data[[cols[3]]]),
+                  alpha = 0.14, colour = NA) +
+      geom_line(linewidth = 1) +
+      geom_point(size = 1.1) +
+      facet_wrap(~Phase_lab, ncol = 3, drop = FALSE) +
+      scale_color_manual(values = pal_year, name = "Год") +
+      scale_fill_manual(values = pal_year, guide = "none") +
+      scale_x_continuous(breaks = seq(0,23,6), limits = c(0,23), expand = c(0,0)) +
+      labs(title = paste("Diurnal —", flux),
+           x = "Час суток", y = "µmol CO₂ m⁻² s⁻¹") +
+      theme_base
+  }
+  return(p)
 }
 
 p_NEE  <- plot_flux("NEE")
@@ -314,9 +457,9 @@ print(p_NEE); print(p_GPP); print(p_Reco)
 
 # ----------------------- Сохранение результатов -----------------------
 readr::write_csv(diu, "diurnal_summary_2013_2016_2023.csv")
-ggsave("compare_diurnal_NEE_2013_2016_2023.png",  p_NEE,  width=12, height=8, dpi=300, bg="white")
-ggsave("compare_diurnal_GPP_2013_2016_2023.png",  p_GPP,  width=12, height=8, dpi=300, bg="white")
-ggsave("compare_diurnal_Reco_2013_2016_2023.png", p_Reco, width=12, height=8, dpi=300, bg="white")
+#ggsave("compare_diurnal_NEE_2013_2016_2023.png",  p_NEE,  width=12, height=8, dpi=300, bg="white")
+#ggsave("compare_diurnal_GPP_2013_2016_2023.png",  p_GPP,  width=12, height=8, dpi=300, bg="white")
+#ggsave("compare_diurnal_Reco_2013_2016_2023.png", p_Reco, width=12, height=8, dpi=300, bg="white")
 
 cat("\nГотово. Файлы сохранены:\n  - diurnal_summary_2013_2016_2023.csv\n  - compare_diurnal_*.png\n")
 
@@ -382,7 +525,7 @@ prep_year <- function(df, year){
   stopifnot(all(c("datetime","Phase_lab") %in% names(df)))
   nm <- names(df)
 
-  gpp_col <- pick_first_present(nm, c("GPP","gpp","gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u_star_f"))
+  gpp_col <- pick_first_present(nm, c("GPP","gpp","gpp_dt_u50","gpp_dt_u_star","gpp_u50","gpp_u_star_f"))
   if (is.na(gpp_col)) stop(sprintf("(%s) Не нашли колонку GPP в df%02d", year, year))
 
   ppfd_col <- pick_first_present(nm, c("PPFD","ppfd","PPFD_f","ppfd_f","ppfd_mean","PPFD_mean","ppfd_orig","PPFD_orig"))
@@ -517,11 +660,11 @@ attach_ppfd <- function(df, ppfd_lookup){
 
 # ---------- ПРИМЕНЕНИЕ К 2013/2016 ----------
 # укажите верные пути, если отличаются
-file_2013 <- "eddyproc_partitioned_2013.csv"
+file_2013 <- "Lasslop_2013_Complete_GapFilled.csv"
 file_2016 <- "Moscow_2016_verFin.csv"
 
 # 2013: в исходнике время было в UTC → сдвигаем к МСК +3 ч
-pp2013 <- build_ppfd_lookup(file_2013, year = 2013, tz_in = "UTC", shift_hours = 3L)
+pp2013 <- build_ppfd_lookup(file_2013, year = 2013, tz_in = "UTC", shift_hours = 0L)
 df13   <- attach_ppfd(df13, pp2013)
 
 # 2016: как правило уже локальное/UTC без сдвига
@@ -730,114 +873,6 @@ anno_fixed <- coef_tbl %>%
   ungroup()
 
 stopifnot(exists("light_all"), exists("curve_tbl"), exists("coef_tbl"))
-# 1) биннинг для «усиков»
-bin_w <- 100
-bins_tbl <- light_all %>%
-  mutate(PPFD_bin = pmax(0, floor(PPFD/bin_w)*bin_w)) %>%
-  group_by(Year, Phase_lab, PPFD_bin) %>%
-  summarise(
-    GPP_mean = mean(GPP, na.rm = TRUE),
-    GPP_se   = sd(GPP,  na.rm = TRUE) / sqrt(sum(is.finite(GPP))),
-    .groups  = "drop"
-  ) %>%
-  mutate(GPP_se = replace_na(GPP_se, 0))
-
-# 2) выбор таблиц для кривых и аннотаций (если вы делали пунктир/скрытие 2016 на «Всходах»)
-curves_df <- if (exists("curve_tbl_mod")) curve_tbl_mod else curve_tbl
-anno_df   <- if (exists("anno_fixed_mod")) anno_fixed_mod else {
-  # если нет готовых фиксированных подписей — сделаем быстро
-  y_max_fixed <- suppressWarnings(max(c(light_all$GPP, curves_df$GPP_hat), na.rm = TRUE))
-  if (!is.finite(y_max_fixed) || y_max_fixed <= 0) y_max_fixed <- 10
-  y_breaks <- pretty(c(0, y_max_fixed), n = 6)
-  y_max_fixed <- max(y_breaks)
-  fmt_num <- function(x) ifelse(is.finite(x), formatC(x, format="f", digits=2), "н/д")
-  year_levels <- c(2013, 2016, 2023)
-  top_pad  <- y_max_fixed * 0.04
-  y_step   <- max(y_max_fixed * 0.08, 1.0)
-  x_pad    <- 30
-  coef_tbl %>%
-    mutate(Year = factor(Year, levels = year_levels)) %>%
-    group_by(Phase_lab) %>%
-    arrange(Year) %>%
-    mutate(
-      x     = x_pad,
-      y     = y_max_fixed - top_pad - (row_number()-1) * y_step,
-      label = paste0("α = ", fmt_num(alpha), "  β = ", fmt_num(beta))
-    ) %>%
-    ungroup()
-}
-
-# 3) общая шкала Y, палитра и тема (если ещё не заданы)
-if (!exists("y_max_fixed") || !is.finite(y_max_fixed)) {
-  y_max_fixed <- suppressWarnings(max(c(light_all$GPP, curves_df$GPP_hat), na.rm = TRUE))
-  if (!is.finite(y_max_fixed) || y_max_fixed <= 0) y_max_fixed <- 10
-  y_breaks <- pretty(c(0, y_max_fixed), n = 6)
-  y_max_fixed <- max(y_breaks)
-}
-if (!exists("pal_year")) {
-  pal_year <- c(`2013`="#1b9e77", `2016`="#d95f02", `2023`="#7570b3")
-}
-if (!exists("theme_base")) {
-  theme_base <- theme_bw(base_size=12) +
-    theme(panel.grid.minor=element_blank(),
-          panel.grid.major=element_line(linewidth=0.2, colour="grey85"),
-          strip.background=element_rect(fill="grey95", colour="grey80"),
-          plot.title=element_text(face="bold", hjust=0),
-          legend.position="bottom")
-}
-
-# 4) сам график p_whisk (с поддержкой пунктирной линии, если есть столбец curve_style)
-p_whisk <- ggplot() +
-  geom_point(data = light_all, aes(PPFD, GPP, color = factor(Year)), alpha=0.25, size=1) +
-  geom_errorbar(data = bins_tbl,
-                aes(x = PPFD_bin + (as.numeric(factor(Year))-2)*bin_w/6,
-                    ymin = GPP_mean-1.96*GPP_se, ymax = GPP_mean+1.96*GPP_se,
-                    color=factor(Year)),
-                width = bin_w/4, alpha=0.6) +
-  geom_point(data = bins_tbl,
-             aes(x = PPFD_bin + (as.numeric(factor(Year))-2)*bin_w/6,
-                 y = GPP_mean, color=factor(Year)), size=1.6, alpha=0.8) +
-  {
-    if ("curve_style" %in% names(curves_df))
-      geom_line(data = curves_df, aes(PPFD, GPP_hat, color=factor(Year), linetype=curve_style), linewidth=1.1)
-    else
-      geom_line(data = curves_df, aes(PPFD, GPP_hat, color=factor(Year)), linewidth=1.1)
-  } +
-  geom_text(data = anno_df, aes(x=x, y=y, label=label, color=factor(Year)),
-            hjust=0, vjust=1, size=3.5, fontface="bold") +
-  facet_wrap(~Phase_lab, ncol=3, scales="fixed") +
-  scale_color_manual(values=pal_year, name="Год") +
-  {
-    if ("curve_style" %in% names(curves_df))
-      scale_linetype_manual(values = c(solid="solid", dashed="22"), guide = "none")
-    else NULL
-  } +
-  scale_y_continuous(limits = c(0, y_max_fixed), breaks = y_breaks,
-                     expand = expansion(mult = c(0, 0.02))) +
-  labs(title="Световая кривая — фазы (тренд с «усиками», общая ось Y)",
-       x="PPFD (µmol photons m⁻² s⁻¹)", y="GPP (µmol CO₂ m⁻² s⁻¹)") +
-  theme_base
-
-p_lines_only <- ggplot() +
-  geom_line(data = curve_tbl, aes(PPFD, GPP_hat, color=factor(Year)), linewidth=1.2) +
-  geom_text(data = anno_fixed, aes(x=x, y=y, label=label, color=factor(Year)),
-            hjust=0, vjust=1, size=3.7, fontface="bold") +
-  facet_wrap(~Phase_lab, ncol=3, scales="fixed") +
-  scale_color_manual(values=pal_year, name="Год") +
-  scale_y_continuous(limits = c(0, y_max_fixed), breaks = y_breaks, expand = expansion(mult = c(0, 0.02))) +
-  labs(title="Световая кривая — фазы (только тренд, общая ось Y)",
-       x="PPFD (µmol photons m⁻² s⁻¹)", y="GPP (µmol CO₂ m⁻² s⁻¹)") +
-  theme_base
-print(p_whisk); print(p_lines_pts); print(p_lines_only)
-# При необходимости сохранить:
-# ggsave("lightRG_whiskers_fixedY.png",     p_whisk,      width=12, height=8, dpi=300, bg="white")
-# ggsave("lightRG_lines_points_fixedY.png", p_lines_pts,  width=12, height=8, dpi=300, bg="white")
-# ggsave("lightRG_lines_only_fixedY.png",   p_lines_only, width=12, height=8, dpi=300, bg="white")
-
-readr::write_csv(coef_tbl %>% arrange(Phase_lab, Year), "light_response_coefficients_by_year_phase.csv")
-
-cat("\nГотово. Если после [CHK]-диагностики видите нули/NA — пришлите вывод, посмотрим, где ещё «портятся» типы.\n")
-
 
 # ================================================================
 # Сравнение световых кривых (2013, 2016, 2023) с формулой:
@@ -1282,11 +1317,10 @@ prep_year_wue <- function(df, year){
   gpp_col  <- first_or_stop(df,
                             c("GPP","gpp","gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u_star_f"),
                             "GPP")
-  le_col   <- first_or_stop(df,
-                            c("LE_f","le","le_f","le_orig","le_u50_f","le_u_star_f","le_fall"),
-                            "LE (латентный поток)")
-  vpd_col  <- pick_first_present(nm, c("VPD","vpd","vpd_f","vpd_orig","VPD_f"))
-  tair_col <- pick_first_present(nm, c("TA","ta","tair","tair_f","tair_orig","air_temp","t_air"))
+  # Приоритет для _f (filled - заполненных) данных
+  le_col   <- pick_first_present(nm, c("LE_f","le_f","LE","le","le_orig","le_u50_f","le_u_star_f","le_fall"))
+  vpd_col  <- pick_first_present(nm, c("VPD_f","vpd_f","VPD","vpd","vpd_orig"))
+  tair_col <- pick_first_present(nm, c("Tair_f","tair_f","Tair","TA","ta","tair","tair_orig","air_temp","t_air"))
 
   out <- df %>%
     transmute(
@@ -1294,7 +1328,7 @@ prep_year_wue <- function(df, year){
       datetime  = as.POSIXct(datetime, tz = "UTC"),
       Phase_lab = factor(Phase_lab, levels = PHASE6_RU),
       GPP  = safe_num(.data[[gpp_col]]),          # μmol CO2 m-2 s-1
-      LE   = safe_num(.data[[le_col]]),           # W m-2
+      LE   = if (!is.na(le_col))   safe_num(.data[[le_col]])   else NA_real_,  # W m-2
       VPD  = if (!is.na(vpd_col))  safe_num(.data[[vpd_col]])  else NA_real_,  # kPa
       Tair = if (!is.na(tair_col)) safe_num(.data[[tair_col]]) else NA_real_   # °C
     ) %>%
@@ -1370,7 +1404,7 @@ p_wue_phase <- ggplot(wue_phase, aes(x = Year, y = mn, fill = Year)) +
         strip.background  = element_rect(fill="grey95", colour="grey80"))
 
 print(p_wue_phase)
-ggsave("WUE_by_phase_bar.png", p_wue_phase, width = 12, height = 8, dpi = 300, bg = "white")
+#ggsave("WUE_by_phase_bar.png", p_wue_phase, width = 12, height = 8, dpi = 300, bg = "white")
 
 # ----- (опционально) IWUE, если есть VPD -----
 if (nrow(iwue_phase) > 0) {
@@ -1426,3 +1460,271 @@ p_wue_year <- ggplot(wue_year, aes(Year, mn, fill = Year)) +
         panel.grid.major = element_line(linewidth=0.2, colour="grey85"))
 
 print(p_wue_year)
+#ggsave("WUE_by_year_overall.png", p_wue_year, width = 8, height = 6, dpi = 300, bg = "white")
+
+# ==============================================================================
+# РАСЧЕТ КУМУЛЯТИВНЫХ СУММ ЗА ВЕГЕТАЦИОННЫЙ ПЕРИОД
+# ==============================================================================
+
+cat("\n========================================\n")
+cat("РАСЧЕТ КУМУЛЯТИВНЫХ СУММ\n")
+cat("========================================\n\n")
+
+# Функция для фильтрации по вегетационному периоду
+filter_growing_season <- function(df, sowing_date, harvest_date) {
+  df %>%
+    filter(Date >= as.Date(sowing_date) & Date <= as.Date(harvest_date))
+}
+
+# Функция для добавления дней от сева
+add_days_from_sowing <- function(df, sowing_date) {
+  df %>%
+    mutate(Days_from_sowing = as.numeric(Date - as.Date(sowing_date)) + 1)
+}
+
+# Функция для расчета кумулятивных сумм потоков CO2
+# Пересчитывает µmol CO2 m-2 s-1 в g CO2 m-2 за период
+# 1 µmol CO2 = 44 µg CO2, за 30 минут (1800 с)
+calculate_cumulative_fluxes <- function(df) {
+  df %>%
+    arrange(Date, HourInt) %>%
+    mutate(
+      # Пересчет в g CO2 m-2 за 30 минут
+      # µmol/m2/s * 44 (MW CO2) * 1800 s / 1e6 = g CO2/m2
+      GPP_gC = GPP * 44 * 1800 / 1e6 / 1000 * 12/44,  # g C m-2
+      Reco_gC = Reco * 44 * 1800 / 1e6 / 1000 * 12/44,
+      NEE_gC = NEE * 44 * 1800 / 1e6 / 1000 * 12/44,
+
+      # Кумулятивные суммы
+      GPP_cum = cumsum(ifelse(is.finite(GPP_gC), GPP_gC, 0)),
+      Reco_cum = cumsum(ifelse(is.finite(Reco_gC), Reco_gC, 0)),
+      NEE_cum = cumsum(ifelse(is.finite(NEE_gC), NEE_gC, 0))
+    )
+}
+
+# Функция для расчета кумулятивных сумм активных температур
+calculate_gdd <- function(df, base_temp = 10) {
+  df %>%
+    arrange(Date, HourInt) %>%
+    group_by(Date) %>%
+    summarise(
+      Days_from_sowing = first(Days_from_sowing),
+      Tair_mean = mean(Tair, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      # Сумма активных температур (GDD - Growing Degree Days)
+      GDD_daily = pmax(0, Tair_mean - base_temp),
+      GDD_cum = cumsum(ifelse(is.finite(GDD_daily), GDD_daily, 0))
+    )
+}
+
+# Расчет кумулятивных сумм для каждого года
+cat("Расчет кумулятивных сумм по годам (только вегетационный период)...\n")
+
+# 2013: фильтрация + дни от сева + кумулятивные суммы
+df13_cum <- df13 %>%
+  filter_growing_season(B2013$Sowing, B2013$Harvesting) %>%
+  add_days_from_sowing(B2013$Sowing) %>%
+  calculate_cumulative_fluxes() %>%
+  mutate(Year = 2013)
+
+# 2016: фильтрация + дни от сева + кумулятивные суммы
+df16_cum <- df16 %>%
+  filter_growing_season(B2016$Sowing, B2016$Harvesting) %>%
+  add_days_from_sowing(B2016$Sowing) %>%
+  calculate_cumulative_fluxes() %>%
+  mutate(Year = 2016)
+
+# 2023: фильтрация + дни от сева + кумулятивные суммы
+df23_cum <- df23 %>%
+  filter_growing_season(B2023$Sowing, B2023$Harvesting) %>%
+  add_days_from_sowing(B2023$Sowing) %>%
+  calculate_cumulative_fluxes() %>%
+  mutate(Year = 2023)
+
+# Расчет сумм активных температур (только вегетационный период)
+gdd13 <- df13 %>%
+  filter_growing_season(B2013$Sowing, B2013$Harvesting) %>%
+  add_days_from_sowing(B2013$Sowing) %>%
+  calculate_gdd() %>%
+  mutate(Year = 2013)
+
+gdd16 <- df16 %>%
+  filter_growing_season(B2016$Sowing, B2016$Harvesting) %>%
+  add_days_from_sowing(B2016$Sowing) %>%
+  calculate_gdd() %>%
+  mutate(Year = 2016)
+
+gdd23 <- df23 %>%
+  filter_growing_season(B2023$Sowing, B2023$Harvesting) %>%
+  add_days_from_sowing(B2023$Sowing) %>%
+  calculate_gdd() %>%
+  mutate(Year = 2023)
+
+# Объединение для графиков
+df_all_cum <- bind_rows(df13_cum, df16_cum, df23_cum) %>%
+  mutate(Year = factor(Year))
+
+gdd_all <- bind_rows(gdd13, gdd16, gdd23) %>%
+  mutate(Year = factor(Year))
+
+# ==============================================================================
+# ИТОГОВЫЕ КУМУЛЯТИВНЫЕ СУММЫ ЗА ВЕГЕТАЦИОННЫЙ ПЕРИОД
+# ==============================================================================
+
+cat("\nИтоговые кумулятивные суммы за вегетационный период:\n\n")
+
+cumulative_summary <- df_all_cum %>%
+  group_by(Year) %>%
+  summarise(
+    Start_date = min(Date, na.rm = TRUE),
+    End_date = max(Date, na.rm = TRUE),
+    Days = as.numeric(End_date - Start_date) + 1,
+    
+    GPP_total_gC = max(GPP_cum, na.rm = TRUE),
+    Reco_total_gC = max(Reco_cum, na.rm = TRUE),
+    NEE_total_gC = max(NEE_cum, na.rm = TRUE),
+    
+    GPP_mean = mean(GPP, na.rm = TRUE),
+    Reco_mean = mean(Reco, na.rm = TRUE),
+    NEE_mean = mean(NEE, na.rm = TRUE),
+    
+    .groups = "drop"
+  )
+
+print(cumulative_summary)
+
+# Добавим суммы активных температур
+gdd_summary <- gdd_all %>%
+  group_by(Year) %>%
+  summarise(
+    GDD_total = max(GDD_cum, na.rm = TRUE),
+    GDD_mean = mean(GDD_daily, na.rm = TRUE),
+    Days_above_10C = sum(GDD_daily > 0, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+cat("\nСуммы активных температур (>10°C):\n\n")
+print(gdd_summary)
+
+# Объединенная таблица сравнения
+comparison_table <- cumulative_summary %>%
+  left_join(gdd_summary, by = "Year") %>%
+  select(Year, Days, GPP_total_gC, Reco_total_gC, NEE_total_gC, GDD_total, Days_above_10C)
+
+cat("\nПолная таблица сравнения:\n\n")
+print(comparison_table)
+
+# Сохранение таблицы
+write.csv(comparison_table, "cumulative_comparison_years.csv", row.names = FALSE)
+cat("\n✓ Таблица сохранена: cumulative_comparison_years.csv\n")
+
+# ==============================================================================
+# ГРАФИКИ КУМУЛЯТИВНЫХ СУММ
+# ==============================================================================
+
+cat("\nПостроение графиков кумулятивных сумм...\n")
+
+# Подготовка меток фаз в днях от сева для вертикальных линий
+phase_lines <- tibble(
+  Year = rep(c("2013", "2016", "2023"), each = 6),
+  Phase = rep(c("Всходы", "Кущение", "Выход в трубку", "Колошение", "Цветение", "Созревание"), 3),
+  Days = c(
+    # 2013
+    as.numeric(as.Date("2013-05-12") - as.Date("2013-05-05")) + 1,  # Всходы
+    as.numeric(as.Date("2013-05-28") - as.Date("2013-05-05")) + 1,  # Кущение
+    as.numeric(as.Date("2013-06-15") - as.Date("2013-05-05")) + 1,  # Выход в трубку
+    as.numeric(as.Date("2013-06-30") - as.Date("2013-05-05")) + 1,  # Колошение
+    as.numeric(as.Date("2013-07-08") - as.Date("2013-05-05")) + 1,  # Цветение
+    as.numeric(as.Date("2013-07-22") - as.Date("2013-05-05")) + 1,  # Созревание
+    # 2016
+    as.numeric(as.Date("2016-05-18") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-05-26") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-06-08") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-06-22") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-06-30") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-08-12") - as.Date("2016-05-11")) + 1,
+    # 2023
+    as.numeric(as.Date("2023-05-26") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-06-07") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-06-29") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-07-14") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-07-20") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-08-06") - as.Date("2023-05-18")) + 1
+  )
+)
+
+# График кумулятивного GPP
+p_gpp_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = GPP_cum, color = Year)) +
+  geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
+             linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
+  labs(title = "Кумулятивный GPP по дням вегетационного периода",
+       subtitle = "Вертикальные линии — начало фенофаз",
+       x = "Дни от сева", y = "Кумулятивный GPP (g C m⁻²)",
+       color = "Год") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+print(p_gpp_cum)
+#ggsave("GPP_cumulative.png", p_gpp_cum, width = 10, height = 6, dpi = 300, bg = "white")
+
+# График кумулятивного Reco
+p_reco_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = Reco_cum, color = Year)) +
+  geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
+             linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
+  labs(title = "Кумулятивный Reco по дням вегетационного периода",
+       subtitle = "Вертикальные линии — начало фенофаз",
+       x = "Дни от сева", y = "Кумулятивный Reco (g C m⁻²)",
+       color = "Год") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+print(p_reco_cum)
+#ggsave("Reco_cumulative.png", p_reco_cum, width = 10, height = 6, dpi = 300, bg = "white")
+
+# График кумулятивного NEE
+p_nee_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = NEE_cum, color = Year)) +
+  geom_hline(yintercept = 0, linetype = "solid", color = "grey50", linewidth = 0.5) +
+  geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
+             linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
+  labs(title = "Кумулятивный NEE по дням вегетационного периода",
+       subtitle = "Отрицательные значения = поглощение CO₂. Вертикальные линии — начало фенофаз",
+       x = "Дни от сева", y = "Кумулятивный NEE (g C m⁻²)",
+       color = "Год") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+print(p_nee_cum)
+#ggsave("NEE_cumulative.png", p_nee_cum, width = 10, height = 6, dpi = 300, bg = "white")
+
+# График сумм активных температур
+p_gdd_cum <- ggplot(gdd_all, aes(x = Days_from_sowing, y = GDD_cum, color = Year)) +
+  geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
+             linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
+  labs(title = "Кумулятивная сумма активных температур >10°C",
+       subtitle = "Вертикальные линии — начало фенофаз",
+       x = "Дни от сева", y = "Сумма активных температур (°C·день)",
+       color = "Год") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+print(p_gdd_cum)
+#ggsave("GDD_cumulative.png", p_gdd_cum, width = 10, height = 6, dpi = 300, bg = "white")
+
+cat("\n✓ Все графики сохранены!\n")
+cat("\n========================================\n")
+cat("РАСЧЕТЫ ЗАВЕРШЕНЫ\n")
+cat("========================================\n")
