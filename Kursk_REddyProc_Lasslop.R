@@ -17,6 +17,11 @@ library(tidyr)
 library(lubridate)
 library(gridExtra)
 library(ggthemes)
+library(readxl)
+
+# Define phenophase names
+PHASE_RU <- c("Всходы", "Кущение", "Выход в трубку", "Колошение", "Цветение", "Созревание")
+PHASE_EN <- c("Emergence", "Tillering", "Stem elongation", "Heading", "Flowering", "Ripening")
 
 # =============================================================================
 # 1. DATA LOADING AND PREPARATION
@@ -24,6 +29,40 @@ library(ggthemes)
 
 # Load raw data from EddyPro output
 kursk_data <- fread("Kursk_data_half_our.csv")
+
+# Load phenophase data from xlsx
+# Try to read Phase column from xlsx file
+phenophase_data <- tryCatch({
+  xlsx_data <- read_excel("Kursk_data.xlsx", sheet = 1)
+  if ("Phase" %in% names(xlsx_data)) {
+    xlsx_data %>% select(DoY, Phase) %>% distinct() %>% arrange(DoY)
+  } else {
+    NULL
+  }
+}, error = function(e) {
+  cat("Warning: Could not load phenophase data from Kursk_data.xlsx\n")
+  NULL
+})
+
+# Define phenophase boundaries by DoY (default values for Kursk 2013)
+# These will be overwritten if found in xlsx
+phase_bounds <- data.frame(
+  Phase_ru = factor(PHASE_RU, levels = PHASE_RU),
+  Phase_en = factor(PHASE_EN, levels = PHASE_EN),
+  DoY_start = c(133, 145, 160, 175, 185, 200)  # Default values, adjust as needed
+)
+
+# Function to assign phenophase based on DoY
+assign_phase <- function(doy, bounds = phase_bounds) {
+  phase <- NA_character_
+  for (i in nrow(bounds):1) {
+    if (!is.na(doy) && doy >= bounds$DoY_start[i]) {
+      phase <- as.character(bounds$Phase_ru[i])
+      break
+    }
+  }
+  return(phase)
+}
 
 # Site coordinates (Kursk region - Obojan)
 Lat_deg <- 51.14567
@@ -138,6 +177,12 @@ Results$DateTime <- kursk_data$DateTime[1:nrow(Results)]
 Results$Tsoil <- EddyData$Tsoil[1:nrow(Results)]
 Results$Hour <- EddyData$Hour[1:nrow(Results)]
 
+# Add DoY and assign phenophases
+Results$DoY <- yday(Results$DateTime)
+Results$Phase_ru <- sapply(Results$DoY, assign_phase)
+Results$Phase_ru <- factor(Results$Phase_ru, levels = PHASE_RU)
+Results$Phase_en <- factor(Results$Phase_ru, levels = PHASE_RU, labels = PHASE_EN)
+
 # Convert GPP and Reco to umol m-2 s-1 (they come in this unit)
 # GPP_DT and Reco_DT are the partitioned fluxes from Lasslop method
 
@@ -180,13 +225,11 @@ Daily <- Results %>%
     Reco_cum = cumsum(Reco_sum)
   )
 
-# Hourly aggregation for diurnal patterns
+# Hourly aggregation for diurnal patterns BY PHENOPHASE
 Hourly <- Results %>%
-  mutate(
-    Month = month(DateTime),
-    Hour = floor(Hour)
-  ) %>%
-  group_by(Month, Hour) %>%
+  filter(!is.na(Phase_ru)) %>%
+  mutate(Hour = floor(Hour)) %>%
+  group_by(Phase_ru, Hour) %>%
   summarise(
     NEE_mean = mean(NEE_f, na.rm = TRUE),
     NEE_sd = sd(NEE_f, na.rm = TRUE),
@@ -210,7 +253,7 @@ theme_flux <- theme_few(base_size = 14, base_family = "serif") +
   )
 
 # -----------------------------------------------------------------------------
-# 5.1 Diurnal Cycles by Month
+# 5.1 Diurnal Cycles by Phenophase
 # -----------------------------------------------------------------------------
 
 plot_diurnal_NEE <- ggplot(Hourly, aes(x = Hour, y = NEE_mean)) +
@@ -219,11 +262,11 @@ plot_diurnal_NEE <- ggplot(Hourly, aes(x = Hour, y = NEE_mean)) +
   geom_line(size = 1, color = "blue") +
   geom_point(size = 2, shape = 21, fill = "white") +
   geom_hline(yintercept = 0, linetype = 2) +
-  facet_wrap(~Month, ncol = 3) +
+  facet_wrap(~Phase_ru, ncol = 3) +
   labs(
     x = "Hour of day",
     y = expression(bold("NEE")~"("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
-    title = "Diurnal NEE Cycle by Month (Lasslop Partitioning)"
+    title = "Diurnal NEE Cycle by Phenophase (Lasslop Partitioning)"
   ) +
   theme_flux
 
@@ -232,11 +275,11 @@ plot_diurnal_GPP <- ggplot(Hourly, aes(x = Hour, y = GPP_mean)) +
               alpha = 0.3, fill = "darkgreen") +
   geom_line(size = 1, color = "darkgreen") +
   geom_point(size = 2, shape = 21, fill = "white") +
-  facet_wrap(~Month, ncol = 3) +
+  facet_wrap(~Phase_ru, ncol = 3) +
   labs(
     x = "Hour of day",
     y = expression(bold("GPP")~"("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
-    title = "Diurnal GPP Cycle by Month"
+    title = "Diurnal GPP Cycle by Phenophase"
   ) +
   theme_flux
 
@@ -245,11 +288,11 @@ plot_diurnal_Reco <- ggplot(Hourly, aes(x = Hour, y = Reco_mean)) +
               alpha = 0.3, fill = "brown") +
   geom_line(size = 1, color = "brown") +
   geom_point(size = 2, shape = 21, fill = "white") +
-  facet_wrap(~Month, ncol = 3) +
+  facet_wrap(~Phase_ru, ncol = 3) +
   labs(
     x = "Hour of day",
     y = expression(bold("Reco")~"("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
-    title = "Diurnal Ecosystem Respiration Cycle by Month"
+    title = "Diurnal Ecosystem Respiration Cycle by Phenophase"
   ) +
   theme_flux
 
@@ -351,18 +394,17 @@ plot_light_curve <- ggplot(Results %>% filter(Rg_f > 10 & !is.na(NEE_f)),
   ) +
   theme_flux
 
-# Light curves by month
+# Light curves by phenophase
 plot_light_curve_monthly <- ggplot(Results %>%
-                                     filter(Rg_f > 10 & !is.na(NEE_f)) %>%
-                                     mutate(Month = month(DateTime)),
+                                     filter(Rg_f > 10 & !is.na(NEE_f) & !is.na(Phase_ru)),
                                    aes(x = Rg_f, y = -NEE_f)) +
   geom_point(alpha = 0.1, size = 0.5) +
   geom_smooth(method = "loess", span = 0.5, color = "red", se = FALSE) +
-  facet_wrap(~Month, ncol = 3) +
+  facet_wrap(~Phase_ru, ncol = 3) +
   labs(
     x = expression("Rg (W"~m^{-2}*")"),
     y = expression("-NEE ("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
-    title = "Light Response Curves by Month"
+    title = "Light Response Curves by Phenophase"
   ) +
   theme_flux
 
