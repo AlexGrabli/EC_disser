@@ -97,13 +97,13 @@ EProc$sSetLocationInfo(
 # Estimate Ustar threshold (for filtering low-turbulence periods)
 # Use a fixed threshold if automatic estimation fails
 ustar_est <- EProc$sEstUstarThold()
-ustar_val <- ustar_est$uStarTh[1]
 
-if (is.na(ustar_val)) {
+if (length(ustar_est$uStarTh) == 0 || is.na(ustar_est$uStarTh[1])) {
   # Use typical value for agricultural sites if estimation fails
   ustar_val <- 0.1
   cat("\nUstar threshold could not be estimated, using default:", ustar_val, "m/s\n")
 } else {
+  ustar_val <- ustar_est$uStarTh[1]
   cat("\nEstimated Ustar threshold:", ustar_val, "m/s\n")
 }
 
