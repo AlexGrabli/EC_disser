@@ -28,7 +28,7 @@ kursk_data <- fread("Kursk_data_half_our.csv")
 # Site coordinates (Kursk region - Obojan)
 Lat_deg <- 51.14567
 Long_deg <- 36.50624
-TimeZone_h <- 3  # UTC+3
+TimeZone_h <- 0  # Data already in local time, no shift needed
 
 # Parse DateTime
 kursk_data$DateTime <- as.POSIXct(kursk_data$DateTime, format = "%Y-%m-%d %H:%M:%S")
