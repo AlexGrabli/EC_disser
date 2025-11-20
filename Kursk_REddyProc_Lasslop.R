@@ -134,6 +134,10 @@ Results <- EProc$sExportResults()
 # Add DateTime back
 Results$DateTime <- kursk_data$DateTime[1:nrow(Results)]
 
+# Add Tsoil and Hour from original data (not included in REddyProc output)
+Results$Tsoil <- EddyData$Tsoil[1:nrow(Results)]
+Results$Hour <- EddyData$Hour[1:nrow(Results)]
+
 # Convert GPP and Reco to umol m-2 s-1 (they come in this unit)
 # GPP_DT and Reco_DT are the partitioned fluxes from Lasslop method
 
