@@ -34,9 +34,10 @@ TimeZone_h <- 3  # UTC+3
 kursk_data$DateTime <- as.POSIXct(kursk_data$DateTime, format = "%Y-%m-%d %H:%M:%S")
 
 # Create REddyProc-compatible columns
-# REddyProc expects specific column names
+# REddyProc expects specific column names including DateTime
 EddyData <- kursk_data %>%
   mutate(
+    DateTime = DateTime,  # Keep DateTime for REddyProc
     Year = year(DateTime),
     DoY = yday(DateTime),
     Hour = hour(DateTime) + minute(DateTime)/60,
@@ -59,7 +60,7 @@ EddyData <- kursk_data %>%
     # Soil temperature in deg C
     Tsoil = as.numeric(Tsoil)
   ) %>%
-  select(Year, DoY, Hour, NEE, LE, H, Ustar, Tair, Rg, VPD, rH, Tsoil) %>%
+  select(DateTime, Year, DoY, Hour, NEE, LE, H, Ustar, Tair, Rg, VPD, rH, Tsoil) %>%
   as.data.frame()
 
 # Replace -9999 and other missing value indicators with NA
