@@ -143,7 +143,11 @@ Results$DateTime <- kursk_data$DateTime[1:nrow(Results)]
 
 # Daily aggregation
 Daily <- Results %>%
-  mutate(Date = as.Date(DateTime)) %>%
+  mutate(
+    Date = as.Date(DateTime),
+    DoY = yday(DateTime),
+    Year = year(DateTime)
+  ) %>%
   group_by(Date) %>%
   summarise(
     DoY = first(DoY),
