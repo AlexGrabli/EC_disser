@@ -18,6 +18,8 @@ library(lubridate)
 library(gridExtra)
 library(ggthemes)
 library(readxl)
+library(bigleaf)
+library(ETpartitioning)
 
 # Define phenophase names
 PHASE_RU <- c("Всходы", "Кущение", "Выход в трубку", "Колошение", "Цветение", "Созревание")
@@ -183,6 +185,19 @@ Results$Phase_ru <- sapply(Results$DoY, assign_phase)
 Results$Phase_ru <- factor(Results$Phase_ru, levels = PHASE_RU)
 Results$Phase_en <- factor(Results$Phase_ru, levels = PHASE_RU, labels = PHASE_EN)
 
+# Convert Rg to PPFD using bigleaf (for light curves with PPFD)
+Results$PPFD <- bigleaf::Rg.to.PPFD(Results$Rg_f)
+
+# Calculate E (evapotranspiration in mmol m-2 s-1) from LE
+# LE in W m-2, convert to mmol H2O m-2 s-1
+Results$E_mmol <- LE.to.ET(Results$LE_f, Results$Tair_f) * 1000 / 18.015  # kg to mmol
+
+# Calculate instantaneous WUE and IWUE
+Results$WUE_inst <- ifelse(Results$E_mmol > 0 & !is.na(Results$GPP_DT),
+                           Results$GPP_DT / Results$E_mmol, NA)
+Results$IWUE <- ifelse(Results$E_mmol > 0 & !is.na(Results$GPP_DT) & Results$VPD_f > 0,
+                       Results$GPP_DT * Results$VPD_f / Results$E_mmol, NA)
+
 # Convert GPP and Reco to umol m-2 s-1 (they come in this unit)
 # GPP_DT and Reco_DT are the partitioned fluxes from Lasslop method
 
@@ -212,6 +227,10 @@ Daily <- Results %>%
     VPD_mean = mean(VPD_f, na.rm = TRUE),
     Rg_mean = mean(Rg_f, na.rm = TRUE),
     Tsoil_mean = mean(Tsoil, na.rm = TRUE),
+    PPFD_mean = mean(PPFD, na.rm = TRUE),
+    # WUE metrics
+    WUE_mean = mean(WUE_inst, na.rm = TRUE),
+    IWUE_mean = mean(IWUE, na.rm = TRUE),
     # Count of valid observations
     n_obs = n()
   ) %>%
@@ -380,26 +399,26 @@ plot_WUE_VPD <- ggplot(Daily %>% filter(!is.na(WUE) & is.finite(WUE) & VPD_mean 
 # Filter daytime data for light curves
 light_data <- Results %>%
   filter(!is.na(Phase_ru),
-         is.finite(Rg_f), Rg_f >= 10, Rg_f <= 1000,
+         is.finite(PPFD), PPFD >= 10, PPFD <= 2200,
          is.finite(GPP_DT), GPP_DT >= 0, GPP_DT <= 40)
 
-# Binning by Rg for stable fitting
-bin_w <- 50
+# Binning by PPFD for stable fitting
+bin_w <- 100
 binned <- light_data %>%
-  mutate(Rg_bin = pmax(0, floor(Rg_f/bin_w)*bin_w)) %>%
-  group_by(Phase_ru, Rg_bin) %>%
-  summarise(Rg = mean(Rg_f), GPP = mean(GPP_DT), n = n(), .groups = "drop") %>%
-  arrange(Phase_ru, Rg)
+  mutate(PPFD_bin = pmax(0, floor(PPFD/bin_w)*bin_w)) %>%
+  group_by(Phase_ru, PPFD_bin) %>%
+  summarise(PPFD = mean(PPFD), GPP = mean(GPP_DT), n = n(), .groups = "drop") %>%
+  arrange(Phase_ru, PPFD)
 
-# Fit rectangular hyperbola: GPP = (α * β * Rg) / (α * Rg + β)
+# Fit rectangular hyperbola: GPP = (α * β * PPFD) / (α * PPFD + β)
 fit_lrc_group <- function(dat) {
-  dat <- arrange(dat, Rg)
-  if (nrow(dat) < 5 || diff(range(dat$Rg)) < 100 || var(dat$GPP) < 0.1)
+  dat <- arrange(dat, PPFD)
+  if (nrow(dat) < 5 || diff(range(dat$PPFD)) < 200 || var(dat$GPP) < 0.1)
     return(tibble(alpha = NA_real_, beta = NA_real_))
 
   # Starting values
-  low <- dat %>% filter(Rg <= quantile(Rg, 0.2, na.rm = TRUE))
-  a0 <- suppressWarnings(coef(lm(GPP ~ 0 + Rg, data = low)))[1]
+  low <- dat %>% filter(PPFD <= quantile(PPFD, 0.2, na.rm = TRUE))
+  a0 <- suppressWarnings(coef(lm(GPP ~ 0 + PPFD, data = low)))[1]
   if (!is.finite(a0)) a0 <- 0.03
   a0 <- min(max(a0, 0.005), 0.12)
   b0 <- quantile(dat$GPP, 0.95, na.rm = TRUE)
@@ -407,7 +426,7 @@ fit_lrc_group <- function(dat) {
   b0 <- min(max(b0, 5), 40)
 
   fit <- try(
-    nls(GPP ~ (alpha * beta * Rg) / (alpha * Rg + beta),
+    nls(GPP ~ (alpha * beta * PPFD) / (alpha * PPFD + beta),
         data = dat,
         start = list(alpha = a0, beta = b0),
         algorithm = "port",
@@ -428,7 +447,7 @@ fit_lrc_group <- function(dat) {
   best <- list(a = NA_real_, b = NA_real_, rss = Inf)
   for (aa in grid_a) {
     for (bb in grid_b) {
-      pred <- (aa * bb * dat$Rg) / (aa * dat$Rg + bb)
+      pred <- (aa * bb * dat$PPFD) / (aa * dat$PPFD + bb)
       rss <- sum((dat$GPP - pred)^2)
       if (is.finite(rss) && rss < best$rss) best <- list(a = aa, b = bb, rss = rss)
     }
@@ -445,19 +464,19 @@ coef_tbl <- binned %>%
 # Generate fitted curves
 range_tbl <- light_data %>%
   group_by(Phase_ru) %>%
-  summarise(xmax = min(max(Rg_f, na.rm = TRUE), 1000), .groups = "drop")
+  summarise(xmax = min(max(PPFD, na.rm = TRUE), 2000), .groups = "drop")
 
 curve_tbl <- coef_tbl %>%
   left_join(range_tbl, by = "Phase_ru") %>%
   filter(is.finite(alpha), is.finite(beta), is.finite(xmax), xmax > 0) %>%
   rowwise() %>%
   mutate(data = list(tibble(
-    Rg = seq(0, xmax, length.out = 200),
-    GPP_hat = (alpha * beta * Rg) / (alpha * Rg + beta)
+    PPFD = seq(0, xmax, length.out = 200),
+    GPP_hat = (alpha * beta * PPFD) / (alpha * PPFD + beta)
   ))) %>%
   ungroup() %>%
   unnest(data) %>%
-  select(Phase_ru, Rg, GPP_hat)
+  select(Phase_ru, PPFD, GPP_hat)
 
 # Create annotations for α and β
 y_max_fixed <- suppressWarnings(max(c(light_data$GPP_DT, curve_tbl$GPP_hat), na.rm = TRUE))
@@ -484,15 +503,15 @@ theme_base <- theme_bw(base_size = 12) +
 
 # Light curves by phenophase with fitted curves and coefficients
 plot_light_curve_phase <- ggplot() +
-  geom_point(data = light_data, aes(x = Rg_f, y = GPP_DT),
+  geom_point(data = light_data, aes(x = PPFD, y = GPP_DT),
              alpha = 0.1, size = 0.5, color = "grey50") +
-  geom_line(data = curve_tbl, aes(x = Rg, y = GPP_hat),
+  geom_line(data = curve_tbl, aes(x = PPFD, y = GPP_hat),
             color = "red", linewidth = 1) +
   geom_text(data = anno, aes(x = x, y = y, label = label),
             hjust = 0, vjust = 1, size = 3, color = "black") +
   facet_wrap(~Phase_ru, ncol = 3) +
   labs(
-    x = expression("Rg (W"~m^{-2}*")"),
+    x = expression("PPFD ("*mu*"mol"~m^{-2}~s^{-1}*")"),
     y = expression("GPP ("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
     title = "Light Response Curves by Phenophase"
   ) +
