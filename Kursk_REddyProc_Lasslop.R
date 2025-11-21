@@ -835,18 +835,15 @@ cat("COMPARATIVE ANALYSIS: Moscow 2013 vs Kursk\n")
 cat("========================================\n")
 
 # Load Moscow 2013 data
-moscow_file <- "Lasslop_2013_Complete_GapFilled.csv"
+moscow_file <- "eddyproc_partitioned_2013.csv"
 if (file.exists(moscow_file)) {
 
   # Read Moscow data
   moscow_raw <- fread(moscow_file)
   names(moscow_raw) <- tolower(names(moscow_raw))
 
-  # Parse time
-  moscow_raw$datetime <- as.POSIXct(moscow_raw$timestamp_start, format = "%Y%m%d%H%M")
-  if (all(is.na(moscow_raw$datetime))) {
-    moscow_raw$datetime <- as.POSIXct(moscow_raw$timestamp, format = "%Y-%m-%d %H:%M:%S")
-  }
+  # Parse time (ISO format: 2013-04-30T20:30:00Z)
+  moscow_raw$datetime <- as.POSIXct(moscow_raw$datetime, format = "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
 
   # Moscow phenophase boundaries (2013)
   B_Moscow <- list(
@@ -880,11 +877,11 @@ if (file.exists(moscow_file)) {
 
   # Prepare Moscow data
   nm <- names(moscow_raw)
-  col_gpp <- pick_col(nm, c("gpp_dt_u50", "gpp_dt", "gpp_f", "gpp"))
-  col_reco <- pick_col(nm, c("reco_dt_u50", "reco_dt", "reco_f", "reco"))
-  col_nee <- pick_col(nm, c("nee_u50_f", "nee_f", "nee"))
-  col_le <- pick_col(nm, c("le_f", "le"))
-  col_rg <- pick_col(nm, c("rg_f", "rg", "sw_in"))
+  col_gpp <- pick_col(nm, c("gpp_dt_u50", "gpp_dt_ustar", "gpp_dt", "gpp_f", "gpp"))
+  col_reco <- pick_col(nm, c("reco_dt_u50", "reco_dt_ustar", "reco_dt", "reco_f", "reco"))
+  col_nee <- pick_col(nm, c("nee_u50_f", "nee_ustar_f", "nee_f", "nee"))
+  col_le <- pick_col(nm, c("le_f", "le_orig", "le"))
+  col_rg <- pick_col(nm, c("rg_f", "rg_orig", "rg", "sw_in"))
 
   Moscow <- data.frame(
     Site = "Moscow",
