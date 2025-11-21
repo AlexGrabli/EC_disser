@@ -1310,6 +1310,7 @@ first_or_stop <- function(df, candidates, label = "колонку"){
 }
 
 # ----- подготовка по году: выбираем ровно по 1 колонке для GPP/LE/VPD/Tair и считаем WUE -----
+# Используем bigleaf::LE.to.ET() для корректного расчета эвапотранспирации
 prep_year_wue <- function(df, year){
   stopifnot(all(c("datetime","Phase_lab") %in% names(df)))
   nm <- names(df)
@@ -1321,6 +1322,7 @@ prep_year_wue <- function(df, year){
   le_col   <- pick_first_present(nm, c("LE_f","le_f","LE","le","le_orig","le_u50_f","le_u_star_f","le_fall"))
   vpd_col  <- pick_first_present(nm, c("VPD_f","vpd_f","VPD","vpd","vpd_orig"))
   tair_col <- pick_first_present(nm, c("Tair_f","tair_f","Tair","TA","ta","tair","tair_orig","air_temp","t_air"))
+  ppfd_col <- pick_first_present(nm, c("PPFD_f","ppfd_f","PPFD","ppfd","ppfd_in","par_in"))
 
   out <- df %>%
     transmute(
@@ -1330,23 +1332,32 @@ prep_year_wue <- function(df, year){
       GPP  = safe_num(.data[[gpp_col]]),          # μmol CO2 m-2 s-1
       LE   = if (!is.na(le_col))   safe_num(.data[[le_col]])   else NA_real_,  # W m-2
       VPD  = if (!is.na(vpd_col))  safe_num(.data[[vpd_col]])  else NA_real_,  # kPa
-      Tair = if (!is.na(tair_col)) safe_num(.data[[tair_col]]) else NA_real_   # °C
+      Tair = if (!is.na(tair_col)) safe_num(.data[[tair_col]]) else NA_real_,  # °C
+      PPFD = if (!is.na(ppfd_col)) safe_num(.data[[ppfd_col]]) else NA_real_   # μmol m-2 s-1
     ) %>%
-    # расчёт λ (Джоулей на кг) с поправкой на Tair, если она есть
-    mutate(lambda_J_kg = ifelse(is.finite(Tair),
-                                2.501e6 - 2.361e3 * Tair,
-                                2.45e6),
-           # mmol H2O m-2 s-1
-           E_mmol = 1000 * LE / (lambda_J_kg * 0.018),
-           WUE  = ifelse(is.finite(E_mmol) & E_mmol > 0 & is.finite(GPP),  GPP / E_mmol, NA_real_),
-           IWUE = ifelse(is.finite(E_mmol) & E_mmol > 0 & is.finite(GPP) & is.finite(VPD),
-                         GPP * VPD / E_mmol, NA_real_)) %>%
+    mutate(
+      # Используем bigleaf для конвертации LE в ET
+      # LE.to.ET возвращает kg m-2 s-1, переводим в mmol m-2 s-1 (* 1000 / 0.018)
+      ET_kg = ifelse(is.finite(LE) & is.finite(Tair),
+                     bigleaf::LE.to.ET(LE, Tair),
+                     ifelse(is.finite(LE), LE / 2.45e6, NA_real_)),  # fallback если нет Tair
+      E_mmol = ET_kg * 1000 / 0.018,  # mmol H2O m-2 s-1
+
+      # WUE = GPP / ET (μmol CO2 / mmol H2O)
+      WUE  = ifelse(is.finite(E_mmol) & E_mmol > 0 & is.finite(GPP),
+                    GPP / E_mmol, NA_real_),
+
+      # iWUE (intrinsic WUE) = GPP * VPD / ET (μmol CO2 kPa / mmol H2O)
+      # Также известен как underlying WUE (uWUE)
+      IWUE = ifelse(is.finite(E_mmol) & E_mmol > 0 & is.finite(GPP) & is.finite(VPD),
+                    GPP * VPD / E_mmol, NA_real_)
+    ) %>%
     # фильтр очевидных выбросов/некорректных значений
     filter(!is.na(Phase_lab),
            is.finite(WUE),  WUE  >= 0,  WUE  <= 40,
            is.finite(GPP),  GPP  >= 0,  GPP  <= 40,
            is.finite(LE),   LE   >= 5) %>%      # исключаем почти нулевой LE
-    select(Year, datetime, Phase_lab, GPP, LE, VPD, Tair, E_mmol, WUE, IWUE)
+    select(Year, datetime, Phase_lab, GPP, LE, VPD, Tair, PPFD, E_mmol, WUE, IWUE)
 
   out
 }
@@ -1461,6 +1472,203 @@ p_wue_year <- ggplot(wue_year, aes(Year, mn, fill = Year)) +
 
 print(p_wue_year)
 #ggsave("WUE_by_year_overall.png", p_wue_year, width = 8, height = 6, dpi = 300, bg = "white")
+
+# ==============================================================================
+# ДОПОЛНИТЕЛЬНЫЕ ГРАФИКИ WUE И iWUE
+# ==============================================================================
+
+cat("\n\nПостроение дополнительных графиков WUE и iWUE...\n")
+
+# ----- Boxplot WUE по фенофазам (сравнение между годами) -----
+p_wue_boxplot_compare <- ggplot(w_all, aes(x = Phase_lab, y = WUE, fill = factor(Year))) +
+  geom_boxplot(alpha = 0.7, outlier.size = 0.5) +
+  scale_fill_manual(values = pal_year, name = "Год") +
+  labs(title = "WUE по фенофазам — сравнение между годами",
+       x = "Фенофаза", y = "WUE (μmol CO₂ / mmol H₂O)") +
+  theme_bw(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid.minor = element_blank())
+
+print(p_wue_boxplot_compare)
+ggsave("WUE_boxplot_compare_years.png", p_wue_boxplot_compare, width = 12, height = 6, dpi = 300, bg = "white")
+
+# ----- Boxplot iWUE по фенофазам (сравнение между годами) -----
+if (sum(is.finite(w_all$IWUE)) > 10) {
+  p_iwue_boxplot_compare <- ggplot(w_all %>% filter(is.finite(IWUE)),
+                                    aes(x = Phase_lab, y = IWUE, fill = factor(Year))) +
+    geom_boxplot(alpha = 0.7, outlier.size = 0.5) +
+    scale_fill_manual(values = pal_year, name = "Год") +
+    labs(title = "iWUE по фенофазам — сравнение между годами",
+         x = "Фенофаза", y = "iWUE (μmol CO₂ kPa / mmol H₂O)") +
+    theme_bw(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          panel.grid.minor = element_blank())
+
+  print(p_iwue_boxplot_compare)
+  ggsave("iWUE_boxplot_compare_years.png", p_iwue_boxplot_compare, width = 12, height = 6, dpi = 300, bg = "white")
+}
+
+# ----- Barplot WUE для каждого года отдельно -----
+for (yr in c(2013, 2016, 2023)) {
+  wue_yr <- wue_phase %>% filter(Year == yr)
+  if (nrow(wue_yr) > 0) {
+    p <- ggplot(wue_yr, aes(x = Phase_lab, y = mn, fill = Phase_lab)) +
+      geom_col(alpha = 0.8) +
+      geom_errorbar(aes(ymin = pmax(0, mn - 1.96*se), ymax = mn + 1.96*se),
+                    width = 0.3, linewidth = 0.5) +
+      scale_fill_brewer(palette = "Set2", guide = "none") +
+      labs(title = paste("WUE по фенофазам —", yr),
+           x = "Фенофаза", y = "WUE (μmol CO₂ / mmol H₂O)") +
+      theme_bw(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            panel.grid.minor = element_blank())
+
+    print(p)
+    ggsave(paste0("WUE_barplot_", yr, ".png"), p, width = 10, height = 6, dpi = 300, bg = "white")
+  }
+}
+
+# ----- Boxplot WUE для каждого года отдельно -----
+for (yr in c(2013, 2016, 2023)) {
+  w_yr <- w_all %>% filter(Year == yr)
+  if (nrow(w_yr) > 0) {
+    p <- ggplot(w_yr, aes(x = Phase_lab, y = WUE, fill = Phase_lab)) +
+      geom_boxplot(alpha = 0.7) +
+      scale_fill_brewer(palette = "Set2", guide = "none") +
+      labs(title = paste("WUE по фенофазам —", yr),
+           x = "Фенофаза", y = "WUE (μmol CO₂ / mmol H₂O)") +
+      theme_bw(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            panel.grid.minor = element_blank())
+
+    print(p)
+    ggsave(paste0("WUE_boxplot_", yr, ".png"), p, width = 10, height = 6, dpi = 300, bg = "white")
+  }
+}
+
+# ----- Barplot и Boxplot iWUE для каждого года отдельно -----
+for (yr in c(2013, 2016, 2023)) {
+  iwue_yr <- iwue_phase %>% filter(Year == yr)
+  w_yr <- w_all %>% filter(Year == yr, is.finite(IWUE))
+
+  if (nrow(iwue_yr) > 0) {
+    # Barplot
+    p_bar <- ggplot(iwue_yr, aes(x = Phase_lab, y = mn, fill = Phase_lab)) +
+      geom_col(alpha = 0.8) +
+      geom_errorbar(aes(ymin = pmax(0, mn - 1.96*se), ymax = mn + 1.96*se),
+                    width = 0.3, linewidth = 0.5) +
+      scale_fill_brewer(palette = "Set2", guide = "none") +
+      labs(title = paste("iWUE по фенофазам —", yr),
+           x = "Фенофаза", y = "iWUE (μmol CO₂ kPa / mmol H₂O)") +
+      theme_bw(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            panel.grid.minor = element_blank())
+
+    print(p_bar)
+    ggsave(paste0("iWUE_barplot_", yr, ".png"), p_bar, width = 10, height = 6, dpi = 300, bg = "white")
+  }
+
+  if (nrow(w_yr) > 0) {
+    # Boxplot
+    p_box <- ggplot(w_yr, aes(x = Phase_lab, y = IWUE, fill = Phase_lab)) +
+      geom_boxplot(alpha = 0.7) +
+      scale_fill_brewer(palette = "Set2", guide = "none") +
+      labs(title = paste("iWUE по фенофазам —", yr),
+           x = "Фенофаза", y = "iWUE (μmol CO₂ kPa / mmol H₂O)") +
+      theme_bw(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            panel.grid.minor = element_blank())
+
+    print(p_box)
+    ggsave(paste0("iWUE_boxplot_", yr, ".png"), p_box, width = 10, height = 6, dpi = 300, bg = "white")
+  }
+}
+
+# ==============================================================================
+# ЗАВИСИМОСТИ GPP ОТ VPD И PPFD ПО ФЕНОФАЗАМ
+# ==============================================================================
+
+cat("\nПостроение графиков GPP vs VPD и GPP vs PPFD...\n")
+
+# ----- GPP vs VPD по фенофазам для каждого года -----
+for (yr in c(2013, 2016, 2023)) {
+  w_yr <- w_all %>% filter(Year == yr, is.finite(VPD), is.finite(GPP))
+
+  if (nrow(w_yr) > 10) {
+    p <- ggplot(w_yr, aes(x = VPD, y = GPP)) +
+      geom_point(alpha = 0.3, size = 0.8, color = pal_year[as.character(yr)]) +
+      geom_smooth(method = "loess", se = TRUE, color = "black", linewidth = 0.8) +
+      facet_wrap(~Phase_lab, ncol = 3, scales = "free") +
+      labs(title = paste("Зависимость GPP от VPD по фенофазам —", yr),
+           x = "VPD (kPa)", y = "GPP (μmol CO₂ m⁻² s⁻¹)") +
+      theme_bw(base_size = 11) +
+      theme(panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey95"))
+
+    print(p)
+    ggsave(paste0("GPP_vs_VPD_", yr, ".png"), p, width = 12, height = 8, dpi = 300, bg = "white")
+  }
+}
+
+# ----- GPP vs PPFD по фенофазам для каждого года -----
+for (yr in c(2013, 2016, 2023)) {
+  w_yr <- w_all %>% filter(Year == yr, is.finite(PPFD), is.finite(GPP), PPFD > 10)
+
+  if (nrow(w_yr) > 10) {
+    p <- ggplot(w_yr, aes(x = PPFD, y = GPP)) +
+      geom_point(alpha = 0.3, size = 0.8, color = pal_year[as.character(yr)]) +
+      geom_smooth(method = "loess", se = TRUE, color = "black", linewidth = 0.8) +
+      facet_wrap(~Phase_lab, ncol = 3, scales = "free") +
+      labs(title = paste("Зависимость GPP от PPFD по фенофазам —", yr),
+           subtitle = "Световые кривые фотосинтеза",
+           x = "PPFD (μmol m⁻² s⁻¹)", y = "GPP (μmol CO₂ m⁻² s⁻¹)") +
+      theme_bw(base_size = 11) +
+      theme(panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey95"))
+
+    print(p)
+    ggsave(paste0("GPP_vs_PPFD_", yr, ".png"), p, width = 12, height = 8, dpi = 300, bg = "white")
+  }
+}
+
+# ----- Сравнительные графики GPP vs VPD между годами -----
+w_all_vpd <- w_all %>% filter(is.finite(VPD), is.finite(GPP))
+if (nrow(w_all_vpd) > 30) {
+  p_vpd_compare <- ggplot(w_all_vpd, aes(x = VPD, y = GPP, color = factor(Year))) +
+    geom_point(alpha = 0.2, size = 0.5) +
+    geom_smooth(method = "loess", se = FALSE, linewidth = 1) +
+    facet_wrap(~Phase_lab, ncol = 3, scales = "free") +
+    scale_color_manual(values = pal_year, name = "Год") +
+    labs(title = "Зависимость GPP от VPD — сравнение по годам",
+         x = "VPD (kPa)", y = "GPP (μmol CO₂ m⁻² s⁻¹)") +
+    theme_bw(base_size = 11) +
+    theme(panel.grid.minor = element_blank(),
+          strip.background = element_rect(fill = "grey95"))
+
+  print(p_vpd_compare)
+  ggsave("GPP_vs_VPD_compare_years.png", p_vpd_compare, width = 12, height = 8, dpi = 300, bg = "white")
+}
+
+# ----- Сравнительные графики GPP vs PPFD между годами -----
+w_all_ppfd <- w_all %>% filter(is.finite(PPFD), is.finite(GPP), PPFD > 10)
+if (nrow(w_all_ppfd) > 30) {
+  p_ppfd_compare <- ggplot(w_all_ppfd, aes(x = PPFD, y = GPP, color = factor(Year))) +
+    geom_point(alpha = 0.2, size = 0.5) +
+    geom_smooth(method = "loess", se = FALSE, linewidth = 1) +
+    facet_wrap(~Phase_lab, ncol = 3, scales = "free") +
+    scale_color_manual(values = pal_year, name = "Год") +
+    labs(title = "Зависимость GPP от PPFD — сравнение по годам",
+         subtitle = "Световые кривые фотосинтеза",
+         x = "PPFD (μmol m⁻² s⁻¹)", y = "GPP (μmol CO₂ m⁻² s⁻¹)") +
+    theme_bw(base_size = 11) +
+    theme(panel.grid.minor = element_blank(),
+          strip.background = element_rect(fill = "grey95"))
+
+  print(p_ppfd_compare)
+  ggsave("GPP_vs_PPFD_compare_years.png", p_ppfd_compare, width = 12, height = 8, dpi = 300, bg = "white")
+}
+
+cat("\n✓ Графики WUE, iWUE, GPP vs VPD, GPP vs PPFD сохранены!\n")
 
 # ==============================================================================
 # РАСЧЕТ КУМУЛЯТИВНЫХ СУММ ЗА ВЕГЕТАЦИОННЫЙ ПЕРИОД
