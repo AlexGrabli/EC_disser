@@ -51,7 +51,7 @@ phenophase_data <- tryCatch({
 phase_bounds <- data.frame(
   Phase_ru = factor(PHASE_RU, levels = PHASE_RU),
   Phase_en = factor(PHASE_EN, levels = PHASE_EN),
-  DoY_start = c(133, 145, 160, 175, 185, 200)  # Default values, adjust as needed
+  DoY_start = c(115, 136, 157, 165, 180, 196)  # Kursk phenophase dates
 )
 
 # Function to assign phenophase based on DoY
@@ -850,9 +850,9 @@ if (file.exists(moscow_file)) {
 
   # Moscow phenophase boundaries (2013)
   B_Moscow <- list(
-    Emergence = as.Date("2013-05-12"), Tillering = as.Date("2013-05-28"),
-    StemElong = as.Date("2013-06-15"), Heading = as.Date("2013-06-30"),
-    Flowering = as.Date("2013-07-08"), Ripening = as.Date("2013-07-22"),
+    Emergence = as.Date("2013-05-14"), Tillering = as.Date("2013-06-03"),
+    StemElong = as.Date("2013-06-27"), Heading = as.Date("2013-07-17"),
+    Flowering = as.Date("2013-07-28"), Ripening = as.Date("2013-08-03"),
     Harvesting = as.Date("2013-08-14")
   )
 
@@ -1054,12 +1054,28 @@ if (file.exists(moscow_file)) {
     ungroup() %>%
     unnest(data)
 
+  # Create annotations for α and β
+  y_max_compare <- max(c(light_compare$GPP, curve_compare$GPP_hat), na.rm = TRUE)
+  fmt_num <- function(x) ifelse(is.finite(x), formatC(x, format = "f", digits = 3), "N/A")
+
+  anno_compare <- coef_compare %>%
+    group_by(Phase_ru) %>%
+    arrange(Site) %>%
+    mutate(
+      x = 50,
+      y = y_max_compare * (0.95 - 0.12 * (row_number() - 1)),
+      label = paste0(Site, ": α=", fmt_num(alpha), " β=", fmt_num(beta))
+    ) %>%
+    ungroup()
+
   # Plot light curves comparison
   plot_compare_light <- ggplot() +
     geom_point(data = light_compare, aes(x = PPFD, y = GPP, color = Site),
                alpha = 0.05, size = 0.3) +
     geom_line(data = curve_compare, aes(x = PPFD, y = GPP_hat, color = Site),
               linewidth = 1) +
+    geom_text(data = anno_compare, aes(x = x, y = y, label = label, color = Site),
+              hjust = 0, vjust = 1, size = 2.5, show.legend = FALSE) +
     facet_wrap(~Phase_ru, ncol = 3) +
     scale_color_manual(values = pal_site) +
     labs(
