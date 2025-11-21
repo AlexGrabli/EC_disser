@@ -69,7 +69,7 @@ assign_phase <- function(doy, bounds = phase_bounds) {
 # Site coordinates (Kursk region - Obojan)
 Lat_deg <- 51.14567
 Long_deg <- 36.50624
-TimeZone_h <- 0  # Data already in local time, no shift needed
+TimeZone_h <- 3  # Moscow time zone (UTC+3)
 
 # Parse DateTime
 kursk_data$DateTime <- as.POSIXct(kursk_data$DateTime, format = "%Y-%m-%d %H:%M:%S")
@@ -766,27 +766,25 @@ dir.create("output_Kursk", showWarnings = FALSE)
 write.csv(Results, "output_Kursk/Kursk_REddyProc_results_halfhourly.csv", row.names = FALSE)
 write.csv(Daily, "output_Kursk/Kursk_REddyProc_results_daily.csv", row.names = FALSE)
 
-# Save plots
-ggsave("output_Kursk/diurnal_NEE.png", plot_diurnal_NEE, width = 12, height = 8, dpi = 300, bg = "white")
-ggsave("output_Kursk/diurnal_GPP.png", plot_diurnal_GPP, width = 12, height = 8, dpi = 300, bg = "white")
-ggsave("output_Kursk/diurnal_Reco.png", plot_diurnal_Reco, width = 12, height = 8, dpi = 300, bg = "white")
-ggsave("output_Kursk/daily_fluxes.png", plot_daily_fluxes, width = 14, height = 6, dpi = 300, bg = "white")
-ggsave("output_Kursk/cumulative_fluxes.png", plot_cumulative, width = 12, height = 6, dpi = 300, bg = "white")
-ggsave("output_Kursk/WUE_seasonal.png", plot_WUE, width = 10, height = 6, dpi = 300, bg = "white")
-ggsave("output_Kursk/WUE_vs_VPD.png", plot_WUE_VPD, width = 10, height = 6, dpi = 300, bg = "white")
-ggsave("output_Kursk/light_curve_by_phase.png", plot_light_curve_phase, width = 12, height = 8, dpi = 300, bg = "white")
-ggsave("output_Kursk/Reco_temperature.png", plot_Reco_temp, width = 10, height = 8, dpi = 300, bg = "white")
-
-# New plots
-ggsave("output_Kursk/WUE_bar_phase.png", plot_WUE_bar_phase, width = 10, height = 6, dpi = 300, bg = "white")
-ggsave("output_Kursk/IWUE_bar_phase.png", plot_IWUE_bar_phase, width = 10, height = 6, dpi = 300, bg = "white")
-ggsave("output_Kursk/WUE_box_phase.png", plot_WUE_box_phase, width = 10, height = 6, dpi = 300, bg = "white")
-ggsave("output_Kursk/IWUE_box_phase.png", plot_IWUE_box_phase, width = 10, height = 6, dpi = 300, bg = "white")
-ggsave("output_Kursk/WUE_bar_season.png", plot_WUE_bar_season, width = 6, height = 6, dpi = 300, bg = "white")
-ggsave("output_Kursk/GPP_vs_PPFD_phase.png", plot_GPP_PPFD, width = 12, height = 8, dpi = 300, bg = "white")
-ggsave("output_Kursk/cumulative_NEE_phase.png", plot_cum_NEE, width = 12, height = 6, dpi = 300, bg = "white")
-ggsave("output_Kursk/cumulative_GPP_phase.png", plot_cum_GPP, width = 12, height = 6, dpi = 300, bg = "white")
-ggsave("output_Kursk/cumulative_Reco_phase.png", plot_cum_Reco, width = 12, height = 6, dpi = 300, bg = "white")
+# Display all plots
+print(plot_diurnal_NEE)
+print(plot_diurnal_GPP)
+print(plot_diurnal_Reco)
+print(plot_daily_fluxes)
+print(plot_cumulative)
+print(plot_WUE)
+print(plot_WUE_VPD)
+print(plot_light_curve_phase)
+print(plot_Reco_temp)
+print(plot_WUE_bar_phase)
+print(plot_IWUE_bar_phase)
+print(plot_WUE_box_phase)
+print(plot_IWUE_box_phase)
+print(plot_WUE_bar_season)
+print(plot_GPP_PPFD)
+print(plot_cum_NEE)
+print(plot_cum_GPP)
+print(plot_cum_Reco)
 
 # =============================================================================
 # 7. SUMMARY STATISTICS
@@ -822,12 +820,3 @@ cat("\nTotal Evapotranspiration:", round(sum(valid_days$ET, na.rm = TRUE), 1), "
 cat("\n========================================\n")
 cat("Results saved to 'output_Kursk/' directory\n")
 cat("========================================\n")
-
-# Display plots
-print(plot_diurnal_NEE)
-print(plot_diurnal_GPP)
-print(plot_diurnal_Reco)
-print(plot_daily_fluxes)
-print(plot_cumulative)
-print(plot_WUE)
-print(plot_light_curve_phase)
