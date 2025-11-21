@@ -845,6 +845,9 @@ if (file.exists(moscow_file)) {
   # Parse time (ISO format: 2013-04-30T20:30:00Z)
   moscow_raw$datetime <- as.POSIXct(moscow_raw$datetime, format = "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
 
+  # Shift time by 3 hours (UTC to Moscow time)
+  moscow_raw$datetime <- moscow_raw$datetime + 3 * 3600
+
   # Moscow phenophase boundaries (2013)
   B_Moscow <- list(
     Emergence = as.Date("2013-05-12"), Tillering = as.Date("2013-05-28"),
