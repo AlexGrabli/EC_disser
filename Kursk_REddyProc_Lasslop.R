@@ -393,6 +393,174 @@ plot_WUE_VPD <- ggplot(Daily %>% filter(!is.na(WUE) & is.finite(WUE) & VPD_mean 
   theme_flux
 
 # -----------------------------------------------------------------------------
+# 5.4a WUE and IWUE by Phenophase (Barplot and Boxplot)
+# -----------------------------------------------------------------------------
+
+# Prepare WUE data by phenophase
+WUE_by_phase <- Results %>%
+  filter(!is.na(Phase_ru), is.finite(WUE_inst), WUE_inst > 0, WUE_inst < 50) %>%
+  group_by(Phase_ru) %>%
+  summarise(
+    WUE_mean = mean(WUE_inst, na.rm = TRUE),
+    WUE_se = sd(WUE_inst, na.rm = TRUE) / sqrt(n()),
+    IWUE_mean = mean(IWUE, na.rm = TRUE),
+    IWUE_se = sd(IWUE, na.rm = TRUE) / sqrt(n()),
+    n = n(),
+    .groups = "drop"
+  )
+
+# Seasonal means
+WUE_season <- Results %>%
+  filter(is.finite(WUE_inst), WUE_inst > 0, WUE_inst < 50) %>%
+  summarise(
+    WUE_mean = mean(WUE_inst, na.rm = TRUE),
+    WUE_se = sd(WUE_inst, na.rm = TRUE) / sqrt(n()),
+    IWUE_mean = mean(IWUE, na.rm = TRUE),
+    IWUE_se = sd(IWUE, na.rm = TRUE) / sqrt(n())
+  )
+
+# WUE Barplot by Phenophase
+plot_WUE_bar_phase <- ggplot(WUE_by_phase, aes(x = Phase_ru, y = WUE_mean)) +
+  geom_bar(stat = "identity", fill = "steelblue", alpha = 0.7) +
+  geom_errorbar(aes(ymin = WUE_mean - 1.96*WUE_se, ymax = WUE_mean + 1.96*WUE_se),
+                width = 0.3) +
+  labs(
+    x = "Phenophase",
+    y = expression("WUE ("*mu*"mol CO"[2]*" / mmol H"[2]*"O)"),
+    title = "Water Use Efficiency by Phenophase"
+  ) +
+  theme_flux +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# IWUE Barplot by Phenophase
+plot_IWUE_bar_phase <- ggplot(WUE_by_phase, aes(x = Phase_ru, y = IWUE_mean)) +
+  geom_bar(stat = "identity", fill = "darkgreen", alpha = 0.7) +
+  geom_errorbar(aes(ymin = IWUE_mean - 1.96*IWUE_se, ymax = IWUE_mean + 1.96*IWUE_se),
+                width = 0.3) +
+  labs(
+    x = "Phenophase",
+    y = expression("IWUE ("*mu*"mol CO"[2]*" hPa / mmol H"[2]*"O)"),
+    title = "Intrinsic WUE by Phenophase"
+  ) +
+  theme_flux +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# WUE Boxplot by Phenophase
+plot_WUE_box_phase <- ggplot(Results %>%
+                               filter(!is.na(Phase_ru), is.finite(WUE_inst),
+                                      WUE_inst > 0, WUE_inst < 20),
+                             aes(x = Phase_ru, y = WUE_inst)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.5, outlier.alpha = 0.3) +
+  labs(
+    x = "Phenophase",
+    y = expression("WUE ("*mu*"mol CO"[2]*" / mmol H"[2]*"O)"),
+    title = "WUE Distribution by Phenophase"
+  ) +
+  theme_flux +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# IWUE Boxplot by Phenophase
+plot_IWUE_box_phase <- ggplot(Results %>%
+                                filter(!is.na(Phase_ru), is.finite(IWUE),
+                                       IWUE > 0, IWUE < 200),
+                              aes(x = Phase_ru, y = IWUE)) +
+  geom_boxplot(fill = "darkgreen", alpha = 0.5, outlier.alpha = 0.3) +
+  labs(
+    x = "Phenophase",
+    y = expression("IWUE ("*mu*"mol CO"[2]*" hPa / mmol H"[2]*"O)"),
+    title = "IWUE Distribution by Phenophase"
+  ) +
+  theme_flux +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Seasonal WUE Barplot
+plot_WUE_bar_season <- ggplot(WUE_season, aes(x = "Season", y = WUE_mean)) +
+  geom_bar(stat = "identity", fill = "steelblue", alpha = 0.7, width = 0.5) +
+  geom_errorbar(aes(ymin = WUE_mean - 1.96*WUE_se, ymax = WUE_mean + 1.96*WUE_se),
+                width = 0.2) +
+  labs(
+    x = "",
+    y = expression("WUE ("*mu*"mol CO"[2]*" / mmol H"[2]*"O)"),
+    title = "Seasonal Mean WUE"
+  ) +
+  theme_flux
+
+# -----------------------------------------------------------------------------
+# 5.4b GPP vs PPFD Scatter by Phenophase
+# -----------------------------------------------------------------------------
+
+plot_GPP_PPFD <- ggplot(Results %>%
+                          filter(!is.na(Phase_ru), PPFD > 10,
+                                 is.finite(GPP_DT), GPP_DT >= 0),
+                        aes(x = PPFD, y = GPP_DT)) +
+  geom_point(alpha = 0.1, size = 0.5, color = "darkgreen") +
+  geom_smooth(method = "loess", span = 0.5, color = "red", se = FALSE) +
+  facet_wrap(~Phase_ru, ncol = 3) +
+  labs(
+    x = expression("PPFD ("*mu*"mol"~m^{-2}~s^{-1}*")"),
+    y = expression("GPP ("*mu*"mol CO"[2]~m^{-2}~s^{-1}*")"),
+    title = "GPP vs PPFD by Phenophase"
+  ) +
+  theme_flux
+
+# -----------------------------------------------------------------------------
+# 5.4c Separate Cumulative Plots with Phenophase Lines
+# -----------------------------------------------------------------------------
+
+# Create phenophase boundaries for vertical lines
+phase_lines <- phase_bounds %>%
+  filter(DoY_start >= min(Daily$DoY) & DoY_start <= max(Daily$DoY))
+
+# Cumulative NEE
+plot_cum_NEE <- ggplot(Daily, aes(x = DoY, y = NEE_cum)) +
+  geom_line(linewidth = 1, color = "blue") +
+  geom_hline(yintercept = 0, linetype = 2) +
+  geom_vline(data = phase_lines, aes(xintercept = DoY_start),
+             linetype = "dotted", color = "gray40", linewidth = 0.7) +
+  geom_text(data = phase_lines,
+            aes(x = DoY_start + 2, y = max(Daily$NEE_cum, na.rm = TRUE) * 0.9,
+                label = Phase_ru),
+            angle = 90, hjust = 1, vjust = 0, size = 3, color = "gray30") +
+  labs(
+    x = "Day of Year",
+    y = expression("Cumulative NEE (g C"~m^{-2}*")"),
+    title = "Cumulative NEE"
+  ) +
+  theme_flux
+
+# Cumulative GPP
+plot_cum_GPP <- ggplot(Daily, aes(x = DoY, y = GPP_cum)) +
+  geom_line(linewidth = 1, color = "darkgreen") +
+  geom_vline(data = phase_lines, aes(xintercept = DoY_start),
+             linetype = "dotted", color = "gray40", linewidth = 0.7) +
+  geom_text(data = phase_lines,
+            aes(x = DoY_start + 2, y = max(Daily$GPP_cum, na.rm = TRUE) * 0.9,
+                label = Phase_ru),
+            angle = 90, hjust = 1, vjust = 0, size = 3, color = "gray30") +
+  labs(
+    x = "Day of Year",
+    y = expression("Cumulative GPP (g C"~m^{-2}*")"),
+    title = "Cumulative GPP"
+  ) +
+  theme_flux
+
+# Cumulative Reco
+plot_cum_Reco <- ggplot(Daily, aes(x = DoY, y = Reco_cum)) +
+  geom_line(linewidth = 1, color = "brown") +
+  geom_vline(data = phase_lines, aes(xintercept = DoY_start),
+             linetype = "dotted", color = "gray40", linewidth = 0.7) +
+  geom_text(data = phase_lines,
+            aes(x = DoY_start + 2, y = max(Daily$Reco_cum, na.rm = TRUE) * 0.9,
+                label = Phase_ru),
+            angle = 90, hjust = 1, vjust = 0, size = 3, color = "gray30") +
+  labs(
+    x = "Day of Year",
+    y = expression("Cumulative Reco (g C"~m^{-2}*")"),
+    title = "Cumulative Ecosystem Respiration"
+  ) +
+  theme_flux
+
+# -----------------------------------------------------------------------------
 # 5.5 Light Response Curves with α and β coefficients
 # -----------------------------------------------------------------------------
 
@@ -563,6 +731,17 @@ ggsave("output_Kursk/WUE_seasonal.png", plot_WUE, width = 10, height = 6, dpi = 
 ggsave("output_Kursk/WUE_vs_VPD.png", plot_WUE_VPD, width = 10, height = 6, dpi = 300, bg = "white")
 ggsave("output_Kursk/light_curve_by_phase.png", plot_light_curve_phase, width = 12, height = 8, dpi = 300, bg = "white")
 ggsave("output_Kursk/Reco_temperature.png", plot_Reco_temp, width = 10, height = 8, dpi = 300, bg = "white")
+
+# New plots
+ggsave("output_Kursk/WUE_bar_phase.png", plot_WUE_bar_phase, width = 10, height = 6, dpi = 300, bg = "white")
+ggsave("output_Kursk/IWUE_bar_phase.png", plot_IWUE_bar_phase, width = 10, height = 6, dpi = 300, bg = "white")
+ggsave("output_Kursk/WUE_box_phase.png", plot_WUE_box_phase, width = 10, height = 6, dpi = 300, bg = "white")
+ggsave("output_Kursk/IWUE_box_phase.png", plot_IWUE_box_phase, width = 10, height = 6, dpi = 300, bg = "white")
+ggsave("output_Kursk/WUE_bar_season.png", plot_WUE_bar_season, width = 6, height = 6, dpi = 300, bg = "white")
+ggsave("output_Kursk/GPP_vs_PPFD_phase.png", plot_GPP_PPFD, width = 12, height = 8, dpi = 300, bg = "white")
+ggsave("output_Kursk/cumulative_NEE_phase.png", plot_cum_NEE, width = 12, height = 6, dpi = 300, bg = "white")
+ggsave("output_Kursk/cumulative_GPP_phase.png", plot_cum_GPP, width = 12, height = 6, dpi = 300, bg = "white")
+ggsave("output_Kursk/cumulative_Reco_phase.png", plot_cum_Reco, width = 12, height = 6, dpi = 300, bg = "white")
 
 # =============================================================================
 # 7. SUMMARY STATISTICS
