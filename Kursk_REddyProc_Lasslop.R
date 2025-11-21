@@ -74,6 +74,9 @@ TimeZone_h <- 3  # Moscow time zone (UTC+3)
 # Parse DateTime
 kursk_data$DateTime <- as.POSIXct(kursk_data$DateTime, format = "%Y-%m-%d %H:%M:%S")
 
+# Shift time by 3 hours (UTC to Moscow time)
+kursk_data$DateTime <- kursk_data$DateTime + 3 * 3600
+
 # Create REddyProc-compatible columns
 # REddyProc expects specific column names including DateTime
 EddyData <- kursk_data %>%
