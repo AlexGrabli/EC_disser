@@ -112,6 +112,34 @@ EddyData[EddyData == -999] <- NA
 EddyData$NEE[abs(EddyData$NEE) > 100] <- NA
 EddyData$Ustar[EddyData$Ustar < 0 | EddyData$Ustar > 5] <- NA
 EddyData$Rg[EddyData$Rg < 0] <- 0
+EddyData$VPD[EddyData$VPD < 0] <- 0  # Fix negative VPD values
+
+# Pad data to complete days for REddyProc
+# Find first and last timestamps
+first_dt <- min(EddyData$DateTime, na.rm = TRUE)
+last_dt <- max(EddyData$DateTime, na.rm = TRUE)
+
+# Calculate expected first timestamp (00:30 of first day)
+first_day <- as.Date(first_dt)
+expected_first <- as.POSIXct(paste(first_day, "00:30:00"))
+
+# Calculate expected last timestamp (00:00 of next day after last)
+last_day <- as.Date(last_dt)
+expected_last <- as.POSIXct(paste(last_day + 1, "00:00:00"))
+
+# Create complete time sequence
+complete_times <- seq(expected_first, expected_last, by = "30 min")
+
+# Merge with existing data
+complete_df <- data.frame(DateTime = complete_times) %>%
+  left_join(EddyData, by = "DateTime") %>%
+  mutate(
+    Year = year(DateTime),
+    DoY = yday(DateTime),
+    Hour = hour(DateTime) + minute(DateTime)/60
+  )
+
+EddyData <- complete_df
 
 cat("Data loaded:", nrow(EddyData), "half-hourly records\n")
 cat("Date range:", min(kursk_data$DateTime, na.rm = TRUE), "to",
@@ -511,18 +539,31 @@ plot_GPP_PPFD <- ggplot(Results %>%
 # 5.4c Separate Cumulative Plots with Phenophase Lines
 # -----------------------------------------------------------------------------
 
+# Define vegetation period (from sowing to harvest)
+veg_start <- min(phase_bounds$DoY_start)  # Start of first phenophase
+veg_end <- max(phase_bounds$DoY_start) + 20  # End of last phenophase + buffer for ripening
+
+# Filter daily data to vegetation period and recalculate cumulative sums
+Daily_veg <- Daily %>%
+  filter(DoY >= veg_start & DoY <= veg_end) %>%
+  mutate(
+    NEE_cum = cumsum(NEE_sum),
+    GPP_cum = cumsum(GPP_sum),
+    Reco_cum = cumsum(Reco_sum)
+  )
+
 # Create phenophase boundaries for vertical lines
 phase_lines <- phase_bounds %>%
-  filter(DoY_start >= min(Daily$DoY) & DoY_start <= max(Daily$DoY))
+  filter(DoY_start >= veg_start & DoY_start <= veg_end)
 
 # Cumulative NEE
-plot_cum_NEE <- ggplot(Daily, aes(x = DoY, y = NEE_cum)) +
+plot_cum_NEE <- ggplot(Daily_veg, aes(x = DoY, y = NEE_cum)) +
   geom_line(linewidth = 1, color = "blue") +
   geom_hline(yintercept = 0, linetype = 2) +
   geom_vline(data = phase_lines, aes(xintercept = DoY_start),
              linetype = "dotted", color = "gray40", linewidth = 0.7) +
   geom_text(data = phase_lines,
-            aes(x = DoY_start + 2, y = max(Daily$NEE_cum, na.rm = TRUE) * 0.9,
+            aes(x = DoY_start + 2, y = max(Daily_veg$NEE_cum, na.rm = TRUE) * 0.9,
                 label = Phase_ru),
             angle = 90, hjust = 1, vjust = 0, size = 3, color = "gray30") +
   labs(
@@ -533,12 +574,12 @@ plot_cum_NEE <- ggplot(Daily, aes(x = DoY, y = NEE_cum)) +
   theme_flux
 
 # Cumulative GPP
-plot_cum_GPP <- ggplot(Daily, aes(x = DoY, y = GPP_cum)) +
+plot_cum_GPP <- ggplot(Daily_veg, aes(x = DoY, y = GPP_cum)) +
   geom_line(linewidth = 1, color = "darkgreen") +
   geom_vline(data = phase_lines, aes(xintercept = DoY_start),
              linetype = "dotted", color = "gray40", linewidth = 0.7) +
   geom_text(data = phase_lines,
-            aes(x = DoY_start + 2, y = max(Daily$GPP_cum, na.rm = TRUE) * 0.9,
+            aes(x = DoY_start + 2, y = max(Daily_veg$GPP_cum, na.rm = TRUE) * 0.9,
                 label = Phase_ru),
             angle = 90, hjust = 1, vjust = 0, size = 3, color = "gray30") +
   labs(
@@ -549,12 +590,12 @@ plot_cum_GPP <- ggplot(Daily, aes(x = DoY, y = GPP_cum)) +
   theme_flux
 
 # Cumulative Reco
-plot_cum_Reco <- ggplot(Daily, aes(x = DoY, y = Reco_cum)) +
+plot_cum_Reco <- ggplot(Daily_veg, aes(x = DoY, y = Reco_cum)) +
   geom_line(linewidth = 1, color = "brown") +
   geom_vline(data = phase_lines, aes(xintercept = DoY_start),
              linetype = "dotted", color = "gray40", linewidth = 0.7) +
   geom_text(data = phase_lines,
-            aes(x = DoY_start + 2, y = max(Daily$Reco_cum, na.rm = TRUE) * 0.9,
+            aes(x = DoY_start + 2, y = max(Daily_veg$Reco_cum, na.rm = TRUE) * 0.9,
                 label = Phase_ru),
             angle = 90, hjust = 1, vjust = 0, size = 3, color = "gray30") +
   labs(
