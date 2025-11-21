@@ -245,11 +245,14 @@ Hourly <- Results %>%
 # 5. VISUALIZATION
 # =============================================================================
 
-# Set theme
-theme_flux <- theme_few(base_size = 14, base_family = "serif") +
+# Set theme (consistent with all_seasons_finalversion_1.R)
+theme_flux <- theme_bw(base_size = 12) +
   theme(
-    axis.title = element_text(face = "bold"),
-    plot.title = element_text(face = "bold", hjust = 0.5)
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(linewidth = 0.2, colour = "grey85"),
+    strip.background = element_rect(fill = "grey95", colour = "grey80"),
+    plot.title = element_text(face = "bold", hjust = 0),
+    legend.position = "bottom"
   )
 
 # -----------------------------------------------------------------------------
@@ -258,41 +261,44 @@ theme_flux <- theme_few(base_size = 14, base_family = "serif") +
 
 plot_diurnal_NEE <- ggplot(Hourly, aes(x = Hour, y = NEE_mean)) +
   geom_ribbon(aes(ymin = NEE_mean - NEE_se, ymax = NEE_mean + NEE_se),
-              alpha = 0.3, fill = "blue") +
-  geom_line(size = 1, color = "blue") +
-  geom_point(size = 2, shape = 21, fill = "white") +
+              alpha = 0.2, fill = "blue") +
+  geom_line(linewidth = 1, color = "blue") +
+  geom_point(size = 1.5, color = "blue") +
   geom_hline(yintercept = 0, linetype = 2) +
   facet_wrap(~Phase_ru, ncol = 3) +
+  scale_x_continuous(breaks = seq(0, 23, 6), limits = c(0, 23)) +
   labs(
     x = "Hour of day",
-    y = expression(bold("NEE")~"("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
-    title = "Diurnal NEE Cycle by Phenophase (Lasslop Partitioning)"
+    y = expression("NEE ("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
+    title = "Diurnal NEE by Phenophase"
   ) +
   theme_flux
 
 plot_diurnal_GPP <- ggplot(Hourly, aes(x = Hour, y = GPP_mean)) +
   geom_ribbon(aes(ymin = GPP_mean - GPP_sd/sqrt(10), ymax = GPP_mean + GPP_sd/sqrt(10)),
-              alpha = 0.3, fill = "darkgreen") +
-  geom_line(size = 1, color = "darkgreen") +
-  geom_point(size = 2, shape = 21, fill = "white") +
+              alpha = 0.2, fill = "darkgreen") +
+  geom_line(linewidth = 1, color = "darkgreen") +
+  geom_point(size = 1.5, color = "darkgreen") +
   facet_wrap(~Phase_ru, ncol = 3) +
+  scale_x_continuous(breaks = seq(0, 23, 6), limits = c(0, 23)) +
   labs(
     x = "Hour of day",
-    y = expression(bold("GPP")~"("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
-    title = "Diurnal GPP Cycle by Phenophase"
+    y = expression("GPP ("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
+    title = "Diurnal GPP by Phenophase"
   ) +
   theme_flux
 
 plot_diurnal_Reco <- ggplot(Hourly, aes(x = Hour, y = Reco_mean)) +
   geom_ribbon(aes(ymin = Reco_mean - Reco_sd/sqrt(10), ymax = Reco_mean + Reco_sd/sqrt(10)),
-              alpha = 0.3, fill = "brown") +
-  geom_line(size = 1, color = "brown") +
-  geom_point(size = 2, shape = 21, fill = "white") +
+              alpha = 0.2, fill = "brown") +
+  geom_line(linewidth = 1, color = "brown") +
+  geom_point(size = 1.5, color = "brown") +
   facet_wrap(~Phase_ru, ncol = 3) +
+  scale_x_continuous(breaks = seq(0, 23, 6), limits = c(0, 23)) +
   labs(
     x = "Hour of day",
-    y = expression(bold("Reco")~"("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
-    title = "Diurnal Ecosystem Respiration Cycle by Phenophase"
+    y = expression("Reco ("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
+    title = "Diurnal Reco by Phenophase"
   ) +
   theme_flux
 
@@ -368,45 +374,139 @@ plot_WUE_VPD <- ggplot(Daily %>% filter(!is.na(WUE) & is.finite(WUE) & VPD_mean 
   theme_flux
 
 # -----------------------------------------------------------------------------
-# 5.5 Light Response Curves
+# 5.5 Light Response Curves with α and β coefficients
 # -----------------------------------------------------------------------------
 
-# Prepare half-hourly data for light curves
-LightCurve_data <- Results %>%
-  filter(Rg_f > 10) %>%  # Daytime only
-  mutate(
-    Rg_bin = cut(Rg_f, breaks = seq(0, max(Rg_f, na.rm = TRUE) + 100, by = 100)),
-    Month = month(DateTime)
+# Filter daytime data for light curves
+light_data <- Results %>%
+  filter(!is.na(Phase_ru),
+         is.finite(Rg_f), Rg_f >= 10, Rg_f <= 1000,
+         is.finite(GPP_DT), GPP_DT >= 0, GPP_DT <= 40)
+
+# Binning by Rg for stable fitting
+bin_w <- 50
+binned <- light_data %>%
+  mutate(Rg_bin = pmax(0, floor(Rg_f/bin_w)*bin_w)) %>%
+  group_by(Phase_ru, Rg_bin) %>%
+  summarise(Rg = mean(Rg_f), GPP = mean(GPP_DT), n = n(), .groups = "drop") %>%
+  arrange(Phase_ru, Rg)
+
+# Fit rectangular hyperbola: GPP = (α * β * Rg) / (α * Rg + β)
+fit_lrc_group <- function(dat) {
+  dat <- arrange(dat, Rg)
+  if (nrow(dat) < 5 || diff(range(dat$Rg)) < 100 || var(dat$GPP) < 0.1)
+    return(tibble(alpha = NA_real_, beta = NA_real_))
+
+  # Starting values
+  low <- dat %>% filter(Rg <= quantile(Rg, 0.2, na.rm = TRUE))
+  a0 <- suppressWarnings(coef(lm(GPP ~ 0 + Rg, data = low)))[1]
+  if (!is.finite(a0)) a0 <- 0.03
+  a0 <- min(max(a0, 0.005), 0.12)
+  b0 <- quantile(dat$GPP, 0.95, na.rm = TRUE)
+  if (!is.finite(b0) || b0 <= 0) b0 <- max(dat$GPP, na.rm = TRUE)
+  b0 <- min(max(b0, 5), 40)
+
+  fit <- try(
+    nls(GPP ~ (alpha * beta * Rg) / (alpha * Rg + beta),
+        data = dat,
+        start = list(alpha = a0, beta = b0),
+        algorithm = "port",
+        lower = c(alpha = 1e-4, beta = 1),
+        upper = c(alpha = 0.2, beta = 60),
+        control = nls.control(maxiter = 500, warnOnly = TRUE)),
+    silent = TRUE
   )
 
-# Light curve for the whole season
-plot_light_curve <- ggplot(Results %>% filter(Rg_f > 10 & !is.na(NEE_f)),
-                           aes(x = Rg_f, y = -NEE_f)) +
-  geom_point(alpha = 0.1, size = 1) +
-  geom_smooth(method = "nls",
-              formula = y ~ (a * x) / (b + x),
-              method.args = list(start = list(a = 30, b = 200)),
-              se = FALSE, color = "red", size = 1.5) +
-  labs(
-    x = expression(bold("Rg")~"(W"~m^{-2}*")"),
-    y = expression(bold("-NEE")~"("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
-    title = "Light Response Curve (All Season)"
-  ) +
-  theme_flux
+  if (!inherits(fit, "try-error")) {
+    co <- coef(fit)
+    return(tibble(alpha = unname(co["alpha"]), beta = unname(co["beta"])))
+  }
 
-# Light curves by phenophase
-plot_light_curve_monthly <- ggplot(Results %>%
-                                     filter(Rg_f > 10 & !is.na(NEE_f) & !is.na(Phase_ru)),
-                                   aes(x = Rg_f, y = -NEE_f)) +
-  geom_point(alpha = 0.1, size = 0.5) +
-  geom_smooth(method = "loess", span = 0.5, color = "red", se = FALSE) +
+  # Fallback: grid search
+  grid_a <- c(0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12)
+  grid_b <- c(5, 8, 10, 15, 20, 30, 40)
+  best <- list(a = NA_real_, b = NA_real_, rss = Inf)
+  for (aa in grid_a) {
+    for (bb in grid_b) {
+      pred <- (aa * bb * dat$Rg) / (aa * dat$Rg + bb)
+      rss <- sum((dat$GPP - pred)^2)
+      if (is.finite(rss) && rss < best$rss) best <- list(a = aa, b = bb, rss = rss)
+    }
+  }
+  tibble(alpha = best$a, beta = best$b)
+}
+
+# Fit coefficients for each phenophase
+coef_tbl <- binned %>%
+  group_by(Phase_ru) %>%
+  group_modify(~fit_lrc_group(.x)) %>%
+  ungroup()
+
+# Generate fitted curves
+range_tbl <- light_data %>%
+  group_by(Phase_ru) %>%
+  summarise(xmax = min(max(Rg_f, na.rm = TRUE), 1000), .groups = "drop")
+
+curve_tbl <- coef_tbl %>%
+  left_join(range_tbl, by = "Phase_ru") %>%
+  filter(is.finite(alpha), is.finite(beta), is.finite(xmax), xmax > 0) %>%
+  rowwise() %>%
+  mutate(data = list(tibble(
+    Rg = seq(0, xmax, length.out = 200),
+    GPP_hat = (alpha * beta * Rg) / (alpha * Rg + beta)
+  ))) %>%
+  ungroup() %>%
+  unnest(data) %>%
+  select(Phase_ru, Rg, GPP_hat)
+
+# Create annotations for α and β
+y_max_fixed <- suppressWarnings(max(c(light_data$GPP_DT, curve_tbl$GPP_hat), na.rm = TRUE))
+if (!is.finite(y_max_fixed) || y_max_fixed <= 0) y_max_fixed <- 10
+
+fmt_num <- function(x) ifelse(is.finite(x), formatC(x, format = "f", digits = 3), "N/A")
+
+anno <- coef_tbl %>%
+  mutate(
+    x = 50,
+    y = y_max_fixed * 0.9,
+    label = paste0("α = ", fmt_num(alpha), "\nβ = ", fmt_num(beta))
+  )
+
+# Theme for plots (consistent with all_seasons_finalversion_1.R)
+theme_base <- theme_bw(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(linewidth = 0.2, colour = "grey85"),
+    strip.background = element_rect(fill = "grey95", colour = "grey80"),
+    plot.title = element_text(face = "bold", hjust = 0),
+    legend.position = "bottom"
+  )
+
+# Light curves by phenophase with fitted curves and coefficients
+plot_light_curve_phase <- ggplot() +
+  geom_point(data = light_data, aes(x = Rg_f, y = GPP_DT),
+             alpha = 0.1, size = 0.5, color = "grey50") +
+  geom_line(data = curve_tbl, aes(x = Rg, y = GPP_hat),
+            color = "red", linewidth = 1) +
+  geom_text(data = anno, aes(x = x, y = y, label = label),
+            hjust = 0, vjust = 1, size = 3, color = "black") +
   facet_wrap(~Phase_ru, ncol = 3) +
   labs(
     x = expression("Rg (W"~m^{-2}*")"),
-    y = expression("-NEE ("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
+    y = expression("GPP ("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")"),
     title = "Light Response Curves by Phenophase"
   ) +
-  theme_flux
+  theme_base
+
+# Print coefficients table
+cat("\n========================================\n")
+cat("LIGHT CURVE COEFFICIENTS (α, β) by Phenophase\n")
+cat("Formula: GPP = (α * β * Rg) / (α * Rg + β)\n")
+cat("========================================\n")
+print(coef_tbl)
+
+# Save coefficients
+write.csv(coef_tbl, "output_Kursk/light_curve_coefficients.csv", row.names = FALSE)
 
 # -----------------------------------------------------------------------------
 # 5.6 Temperature Response of Reco
@@ -435,16 +535,15 @@ write.csv(Results, "output_Kursk/Kursk_REddyProc_results_halfhourly.csv", row.na
 write.csv(Daily, "output_Kursk/Kursk_REddyProc_results_daily.csv", row.names = FALSE)
 
 # Save plots
-ggsave("output_Kursk/diurnal_NEE.png", plot_diurnal_NEE, width = 12, height = 10, dpi = 300)
-ggsave("output_Kursk/diurnal_GPP.png", plot_diurnal_GPP, width = 12, height = 10, dpi = 300)
-ggsave("output_Kursk/diurnal_Reco.png", plot_diurnal_Reco, width = 12, height = 10, dpi = 300)
-ggsave("output_Kursk/daily_fluxes.png", plot_daily_fluxes, width = 14, height = 6, dpi = 300)
-ggsave("output_Kursk/cumulative_fluxes.png", plot_cumulative, width = 12, height = 6, dpi = 300)
-ggsave("output_Kursk/WUE_seasonal.png", plot_WUE, width = 10, height = 6, dpi = 300)
-ggsave("output_Kursk/WUE_vs_VPD.png", plot_WUE_VPD, width = 10, height = 6, dpi = 300)
-ggsave("output_Kursk/light_curve.png", plot_light_curve, width = 10, height = 8, dpi = 300)
-ggsave("output_Kursk/light_curve_monthly.png", plot_light_curve_monthly, width = 12, height = 10, dpi = 300)
-ggsave("output_Kursk/Reco_temperature.png", plot_Reco_temp, width = 10, height = 8, dpi = 300)
+ggsave("output_Kursk/diurnal_NEE.png", plot_diurnal_NEE, width = 12, height = 8, dpi = 300, bg = "white")
+ggsave("output_Kursk/diurnal_GPP.png", plot_diurnal_GPP, width = 12, height = 8, dpi = 300, bg = "white")
+ggsave("output_Kursk/diurnal_Reco.png", plot_diurnal_Reco, width = 12, height = 8, dpi = 300, bg = "white")
+ggsave("output_Kursk/daily_fluxes.png", plot_daily_fluxes, width = 14, height = 6, dpi = 300, bg = "white")
+ggsave("output_Kursk/cumulative_fluxes.png", plot_cumulative, width = 12, height = 6, dpi = 300, bg = "white")
+ggsave("output_Kursk/WUE_seasonal.png", plot_WUE, width = 10, height = 6, dpi = 300, bg = "white")
+ggsave("output_Kursk/WUE_vs_VPD.png", plot_WUE_VPD, width = 10, height = 6, dpi = 300, bg = "white")
+ggsave("output_Kursk/light_curve_by_phase.png", plot_light_curve_phase, width = 12, height = 8, dpi = 300, bg = "white")
+ggsave("output_Kursk/Reco_temperature.png", plot_Reco_temp, width = 10, height = 8, dpi = 300, bg = "white")
 
 # =============================================================================
 # 7. SUMMARY STATISTICS
@@ -483,7 +582,9 @@ cat("========================================\n")
 
 # Display plots
 print(plot_diurnal_NEE)
+print(plot_diurnal_GPP)
+print(plot_diurnal_Reco)
 print(plot_daily_fluxes)
 print(plot_cumulative)
 print(plot_WUE)
-print(plot_light_curve)
+print(plot_light_curve_phase)
