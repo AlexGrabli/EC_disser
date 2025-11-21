@@ -189,13 +189,17 @@ Results$Phase_en <- factor(Results$Phase_ru, levels = PHASE_RU, labels = PHASE_E
 Results$PPFD <- bigleaf::Rg.to.PPFD(Results$Rg_f)
 
 # Calculate E (evapotranspiration in mmol m-2 s-1) from LE
-# LE in W m-2, convert to mmol H2O m-2 s-1
-Results$E_mmol <- LE.to.ET(Results$LE_f, Results$Tair_f) * 1000 / 18.015  # kg to mmol
+# LE in W m-2, convert using latent heat of vaporization
+# E = LE / lambda, where lambda ~ 2.45 MJ/kg at 20C
+# Then convert kg to mol: / 0.018015 kg/mol, then to mmol: * 1000
+Results$E_mmol <- Results$LE_f / (2.45e6) / 0.018015 * 1000  # mmol H2O m-2 s-1
 
 # Calculate instantaneous WUE and IWUE
-Results$WUE_inst <- ifelse(Results$E_mmol > 0 & !is.na(Results$GPP_DT),
+# WUE = GPP / E (umol CO2 / mmol H2O)
+Results$WUE_inst <- ifelse(Results$E_mmol > 0.01 & !is.na(Results$GPP_DT) & Results$GPP_DT > 0,
                            Results$GPP_DT / Results$E_mmol, NA)
-Results$IWUE <- ifelse(Results$E_mmol > 0 & !is.na(Results$GPP_DT) & Results$VPD_f > 0,
+# IWUE = GPP * VPD / E (umol CO2 * hPa / mmol H2O)
+Results$IWUE <- ifelse(Results$E_mmol > 0.01 & !is.na(Results$GPP_DT) & Results$GPP_DT > 0 & Results$VPD_f > 0,
                        Results$GPP_DT * Results$VPD_f / Results$E_mmol, NA)
 
 # Convert GPP and Reco to umol m-2 s-1 (they come in this unit)
