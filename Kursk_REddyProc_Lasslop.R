@@ -480,12 +480,13 @@ plot_IWUE_bar_phase <- ggplot(WUE_by_phase, aes(x = Phase_ru, y = IWUE_mean)) +
   theme_flux +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-# WUE Boxplot by Phenophase
+# WUE Boxplot by Phenophase (with quantile-based outlier filtering)
+wue_q99 <- quantile(Results$WUE_inst[Results$WUE_inst > 0], 0.99, na.rm = TRUE)
 plot_WUE_box_phase <- ggplot(Results %>%
                                filter(!is.na(Phase_ru), is.finite(WUE_inst),
-                                      WUE_inst > 0, WUE_inst < 20),
+                                      WUE_inst > 0, WUE_inst < wue_q99),
                              aes(x = Phase_ru, y = WUE_inst)) +
-  geom_boxplot(fill = "steelblue", alpha = 0.5, outlier.alpha = 0.3) +
+  geom_boxplot(fill = "steelblue", alpha = 0.5, outlier.size = 0.5) +
   labs(
     x = "Phenophase",
     y = expression("WUE ("*mu*"mol CO"[2]*" / mmol H"[2]*"O)"),
@@ -494,12 +495,13 @@ plot_WUE_box_phase <- ggplot(Results %>%
   theme_flux +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-# IWUE Boxplot by Phenophase
+# IWUE Boxplot by Phenophase (with quantile-based outlier filtering)
+iwue_q99 <- quantile(Results$IWUE[Results$IWUE > 0], 0.99, na.rm = TRUE)
 plot_IWUE_box_phase <- ggplot(Results %>%
                                 filter(!is.na(Phase_ru), is.finite(IWUE),
-                                       IWUE > 0, IWUE < 200),
+                                       IWUE > 0, IWUE < iwue_q99),
                               aes(x = Phase_ru, y = IWUE)) +
-  geom_boxplot(fill = "darkgreen", alpha = 0.5, outlier.alpha = 0.3) +
+  geom_boxplot(fill = "darkgreen", alpha = 0.5, outlier.size = 0.5) +
   labs(
     x = "Phenophase",
     y = expression("IWUE ("*mu*"mol CO"[2]*" hPa / mmol H"[2]*"O)"),
@@ -823,3 +825,361 @@ cat("\nTotal Evapotranspiration:", round(sum(valid_days$ET, na.rm = TRUE), 1), "
 cat("\n========================================\n")
 cat("Results saved to 'output_Kursk/' directory\n")
 cat("========================================\n")
+
+# =============================================================================
+# 8. COMPARATIVE ANALYSIS: MOSCOW (2013) vs KURSK
+# =============================================================================
+
+cat("\n========================================\n")
+cat("COMPARATIVE ANALYSIS: Moscow 2013 vs Kursk\n")
+cat("========================================\n")
+
+# Load Moscow 2013 data
+moscow_file <- "Lasslop_2013_Complete_GapFilled.csv"
+if (file.exists(moscow_file)) {
+
+  # Read Moscow data
+  moscow_raw <- fread(moscow_file)
+  names(moscow_raw) <- tolower(names(moscow_raw))
+
+  # Parse time
+  moscow_raw$datetime <- as.POSIXct(moscow_raw$timestamp_start, format = "%Y%m%d%H%M")
+  if (all(is.na(moscow_raw$datetime))) {
+    moscow_raw$datetime <- as.POSIXct(moscow_raw$timestamp, format = "%Y-%m-%d %H:%M:%S")
+  }
+
+  # Moscow phenophase boundaries (2013)
+  B_Moscow <- list(
+    Emergence = as.Date("2013-05-12"), Tillering = as.Date("2013-05-28"),
+    StemElong = as.Date("2013-06-15"), Heading = as.Date("2013-06-30"),
+    Flowering = as.Date("2013-07-08"), Ripening = as.Date("2013-07-22"),
+    Harvesting = as.Date("2013-08-14")
+  )
+
+  # Assign phases for Moscow
+  assign_phase_moscow <- function(date_vec) {
+    res <- rep(NA_character_, length(date_vec))
+    d <- as.Date(date_vec)
+    res[d >= B_Moscow$Emergence & d < B_Moscow$Tillering] <- "Всходы"
+    res[d >= B_Moscow$Tillering & d < B_Moscow$StemElong] <- "Кущение"
+    res[d >= B_Moscow$StemElong & d < B_Moscow$Heading] <- "Выход в трубку"
+    res[d >= B_Moscow$Heading & d < B_Moscow$Flowering] <- "Колошение"
+    res[d >= B_Moscow$Flowering & d < B_Moscow$Ripening] <- "Цветение"
+    res[d >= B_Moscow$Ripening & d <= B_Moscow$Harvesting] <- "Созревание"
+    factor(res, levels = PHASE_RU)
+  }
+
+  # Helper function for column selection
+  pick_col <- function(nm, pats) {
+    for (p in pats) {
+      hit <- grep(paste0("^", p, "$"), nm, ignore.case = TRUE, value = TRUE)
+      if (length(hit)) return(hit[1])
+    }
+    NA_character_
+  }
+
+  # Prepare Moscow data
+  nm <- names(moscow_raw)
+  col_gpp <- pick_col(nm, c("gpp_dt_u50", "gpp_dt", "gpp_f", "gpp"))
+  col_reco <- pick_col(nm, c("reco_dt_u50", "reco_dt", "reco_f", "reco"))
+  col_nee <- pick_col(nm, c("nee_u50_f", "nee_f", "nee"))
+  col_le <- pick_col(nm, c("le_f", "le"))
+  col_rg <- pick_col(nm, c("rg_f", "rg", "sw_in"))
+
+  Moscow <- data.frame(
+    Site = "Moscow",
+    DateTime = moscow_raw$datetime,
+    DoY = yday(moscow_raw$datetime),
+    Hour = hour(moscow_raw$datetime) + minute(moscow_raw$datetime)/60
+  )
+
+  Moscow$NEE <- if (!is.na(col_nee)) as.numeric(moscow_raw[[col_nee]]) else NA
+  Moscow$GPP <- if (!is.na(col_gpp)) as.numeric(moscow_raw[[col_gpp]]) else NA
+  Moscow$Reco <- if (!is.na(col_reco)) as.numeric(moscow_raw[[col_reco]]) else NA
+  Moscow$LE <- if (!is.na(col_le)) as.numeric(moscow_raw[[col_le]]) else NA
+  Moscow$Rg <- if (!is.na(col_rg)) as.numeric(moscow_raw[[col_rg]]) else NA
+  Moscow$PPFD <- bigleaf::Rg.to.PPFD(Moscow$Rg)
+  Moscow$Phase_ru <- assign_phase_moscow(Moscow$DateTime)
+
+  # Calculate WUE for Moscow
+  Moscow$E_mmol <- Moscow$LE / (2.45e6) / 0.018015 * 1000
+  Moscow$WUE <- ifelse(Moscow$E_mmol > 0.01 & Moscow$GPP > 0, Moscow$GPP / Moscow$E_mmol, NA)
+
+  # Prepare Kursk data for comparison
+  Kursk <- data.frame(
+    Site = "Kursk",
+    DateTime = Results$DateTime,
+    DoY = Results$DoY,
+    Hour = Results$Hour,
+    NEE = Results$NEE_f,
+    GPP = Results$GPP_DT,
+    Reco = Results$Reco_DT,
+    LE = Results$LE_f,
+    Rg = Results$Rg_f,
+    PPFD = Results$PPFD,
+    Phase_ru = Results$Phase_ru,
+    E_mmol = Results$E_mmol,
+    WUE = Results$WUE_inst
+  )
+
+  # Combine datasets
+  Compare <- bind_rows(Moscow, Kursk) %>%
+    filter(!is.na(Phase_ru))
+
+  # Color palette
+  pal_site <- c("Moscow" = "#1b9e77", "Kursk" = "#d95f02")
+
+  # -----------------------------------------------------------------------------
+  # 8.1 Comparative Diurnal Cycles
+  # -----------------------------------------------------------------------------
+
+  Hourly_compare <- Compare %>%
+    mutate(HourInt = floor(Hour)) %>%
+    group_by(Site, Phase_ru, HourInt) %>%
+    summarise(
+      NEE_mean = mean(NEE, na.rm = TRUE),
+      NEE_se = sd(NEE, na.rm = TRUE) / sqrt(n()),
+      GPP_mean = mean(GPP, na.rm = TRUE),
+      GPP_se = sd(GPP, na.rm = TRUE) / sqrt(n()),
+      Reco_mean = mean(Reco, na.rm = TRUE),
+      Reco_se = sd(Reco, na.rm = TRUE) / sqrt(n()),
+      .groups = "drop"
+    ) %>%
+    mutate(across(ends_with("_se"), ~replace_na(.x, 0)))
+
+  # Diurnal NEE comparison
+  plot_compare_diurnal_NEE <- ggplot(Hourly_compare,
+                                     aes(x = HourInt, y = NEE_mean, color = Site, fill = Site)) +
+    geom_ribbon(aes(ymin = NEE_mean - 1.96*NEE_se, ymax = NEE_mean + 1.96*NEE_se),
+                alpha = 0.15, color = NA) +
+    geom_line(linewidth = 1) +
+    geom_point(size = 1.2) +
+    geom_hline(yintercept = 0, linetype = 2) +
+    facet_wrap(~Phase_ru, ncol = 3) +
+    scale_color_manual(values = pal_site) +
+    scale_fill_manual(values = pal_site) +
+    scale_x_continuous(breaks = seq(0, 23, 6), limits = c(0, 23)) +
+    labs(
+      title = "Diurnal NEE: Moscow vs Kursk",
+      x = "Hour of day",
+      y = expression("NEE ("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")")
+    ) +
+    theme_flux
+
+  # Diurnal GPP comparison
+  plot_compare_diurnal_GPP <- ggplot(Hourly_compare,
+                                     aes(x = HourInt, y = GPP_mean, color = Site, fill = Site)) +
+    geom_ribbon(aes(ymin = GPP_mean - 1.96*GPP_se, ymax = GPP_mean + 1.96*GPP_se),
+                alpha = 0.15, color = NA) +
+    geom_line(linewidth = 1) +
+    geom_point(size = 1.2) +
+    facet_wrap(~Phase_ru, ncol = 3) +
+    scale_color_manual(values = pal_site) +
+    scale_fill_manual(values = pal_site) +
+    scale_x_continuous(breaks = seq(0, 23, 6), limits = c(0, 23)) +
+    labs(
+      title = "Diurnal GPP: Moscow vs Kursk",
+      x = "Hour of day",
+      y = expression("GPP ("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")")
+    ) +
+    theme_flux
+
+  # Diurnal Reco comparison
+  plot_compare_diurnal_Reco <- ggplot(Hourly_compare,
+                                      aes(x = HourInt, y = Reco_mean, color = Site, fill = Site)) +
+    geom_ribbon(aes(ymin = Reco_mean - 1.96*Reco_se, ymax = Reco_mean + 1.96*Reco_se),
+                alpha = 0.15, color = NA) +
+    geom_line(linewidth = 1) +
+    geom_point(size = 1.2) +
+    facet_wrap(~Phase_ru, ncol = 3) +
+    scale_color_manual(values = pal_site) +
+    scale_fill_manual(values = pal_site) +
+    scale_x_continuous(breaks = seq(0, 23, 6), limits = c(0, 23)) +
+    labs(
+      title = "Diurnal Reco: Moscow vs Kursk",
+      x = "Hour of day",
+      y = expression("Reco ("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")")
+    ) +
+    theme_flux
+
+  # -----------------------------------------------------------------------------
+  # 8.2 Comparative Light Curves
+  # -----------------------------------------------------------------------------
+
+  light_compare <- Compare %>%
+    filter(!is.na(Phase_ru),
+           is.finite(PPFD), PPFD >= 10, PPFD <= 2200,
+           is.finite(GPP), GPP >= 0, GPP <= 40)
+
+  # Binning for fitting
+  bin_w <- 100
+  binned_compare <- light_compare %>%
+    mutate(PPFD_bin = pmax(0, floor(PPFD/bin_w)*bin_w)) %>%
+    group_by(Site, Phase_ru, PPFD_bin) %>%
+    summarise(PPFD = mean(PPFD), GPP = mean(GPP), n = n(), .groups = "drop")
+
+  # Fit function
+  fit_lrc <- function(dat) {
+    dat <- arrange(dat, PPFD)
+    if (nrow(dat) < 5 || diff(range(dat$PPFD)) < 200)
+      return(tibble(alpha = NA_real_, beta = NA_real_))
+
+    a0 <- 0.03; b0 <- max(dat$GPP, na.rm = TRUE) * 0.9
+    fit <- try(nls(GPP ~ (alpha * beta * PPFD) / (alpha * PPFD + beta),
+                   data = dat, start = list(alpha = a0, beta = b0),
+                   algorithm = "port",
+                   lower = c(1e-4, 1), upper = c(0.2, 60),
+                   control = nls.control(maxiter = 500, warnOnly = TRUE)), silent = TRUE)
+
+    if (!inherits(fit, "try-error")) {
+      co <- coef(fit)
+      return(tibble(alpha = unname(co["alpha"]), beta = unname(co["beta"])))
+    }
+    tibble(alpha = NA_real_, beta = NA_real_)
+  }
+
+  coef_compare <- binned_compare %>%
+    group_by(Site, Phase_ru) %>%
+    group_modify(~fit_lrc(.x)) %>%
+    ungroup()
+
+  # Generate curves
+  curve_compare <- coef_compare %>%
+    filter(is.finite(alpha), is.finite(beta)) %>%
+    rowwise() %>%
+    mutate(data = list(tibble(
+      PPFD = seq(0, 2000, length.out = 200),
+      GPP_hat = (alpha * beta * PPFD) / (alpha * PPFD + beta)
+    ))) %>%
+    ungroup() %>%
+    unnest(data)
+
+  # Plot light curves comparison
+  plot_compare_light <- ggplot() +
+    geom_point(data = light_compare, aes(x = PPFD, y = GPP, color = Site),
+               alpha = 0.05, size = 0.3) +
+    geom_line(data = curve_compare, aes(x = PPFD, y = GPP_hat, color = Site),
+              linewidth = 1) +
+    facet_wrap(~Phase_ru, ncol = 3) +
+    scale_color_manual(values = pal_site) +
+    labs(
+      title = "Light Response Curves: Moscow vs Kursk",
+      x = expression("PPFD ("*mu*"mol"~m^{-2}~s^{-1}*")"),
+      y = expression("GPP ("*mu*"mol"~CO[2]~m^{-2}~s^{-1}*")")
+    ) +
+    theme_flux
+
+  # -----------------------------------------------------------------------------
+  # 8.3 Comparative WUE by Phenophase
+  # -----------------------------------------------------------------------------
+
+  WUE_compare <- Compare %>%
+    filter(!is.na(Phase_ru), is.finite(WUE), WUE > 0, WUE < 15) %>%
+    group_by(Site, Phase_ru) %>%
+    summarise(
+      WUE_mean = mean(WUE, na.rm = TRUE),
+      WUE_se = sd(WUE, na.rm = TRUE) / sqrt(n()),
+      .groups = "drop"
+    )
+
+  plot_compare_WUE <- ggplot(WUE_compare, aes(x = Phase_ru, y = WUE_mean, fill = Site)) +
+    geom_bar(stat = "identity", position = position_dodge(0.8), width = 0.7, alpha = 0.7) +
+    geom_errorbar(aes(ymin = WUE_mean - 1.96*WUE_se, ymax = WUE_mean + 1.96*WUE_se),
+                  position = position_dodge(0.8), width = 0.25) +
+    scale_fill_manual(values = pal_site) +
+    labs(
+      title = "WUE by Phenophase: Moscow vs Kursk",
+      x = "Phenophase",
+      y = expression("WUE ("*mu*"mol CO"[2]*" / mmol H"[2]*"O)")
+    ) +
+    theme_flux +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  # -----------------------------------------------------------------------------
+  # 8.4 Comparative Cumulative Fluxes
+  # -----------------------------------------------------------------------------
+
+  # Daily aggregation for both sites
+  Daily_compare <- Compare %>%
+    mutate(Date = as.Date(DateTime)) %>%
+    group_by(Site, Date) %>%
+    summarise(
+      DoY = first(DoY),
+      NEE_sum = sum(NEE, na.rm = TRUE) * 12 * 1800 / 10^6,
+      GPP_sum = sum(GPP, na.rm = TRUE) * 12 * 1800 / 10^6,
+      Reco_sum = sum(Reco, na.rm = TRUE) * 12 * 1800 / 10^6,
+      .groups = "drop"
+    ) %>%
+    group_by(Site) %>%
+    arrange(DoY) %>%
+    mutate(
+      NEE_cum = cumsum(NEE_sum),
+      GPP_cum = cumsum(GPP_sum),
+      Reco_cum = cumsum(Reco_sum)
+    ) %>%
+    ungroup()
+
+  # Filter to vegetation period
+  Daily_compare_veg <- Daily_compare %>%
+    filter(DoY >= 130 & DoY <= 230)
+
+  # Cumulative NEE comparison
+  plot_compare_cum_NEE <- ggplot(Daily_compare_veg, aes(x = DoY, y = NEE_cum, color = Site)) +
+    geom_line(linewidth = 1) +
+    geom_hline(yintercept = 0, linetype = 2) +
+    scale_color_manual(values = pal_site) +
+    labs(
+      title = "Cumulative NEE: Moscow vs Kursk",
+      x = "Day of Year",
+      y = expression("Cumulative NEE (g C"~m^{-2}*")")
+    ) +
+    theme_flux
+
+  # Cumulative GPP comparison
+  plot_compare_cum_GPP <- ggplot(Daily_compare_veg, aes(x = DoY, y = GPP_cum, color = Site)) +
+    geom_line(linewidth = 1) +
+    scale_color_manual(values = pal_site) +
+    labs(
+      title = "Cumulative GPP: Moscow vs Kursk",
+      x = "Day of Year",
+      y = expression("Cumulative GPP (g C"~m^{-2}*")")
+    ) +
+    theme_flux
+
+  # Cumulative Reco comparison
+  plot_compare_cum_Reco <- ggplot(Daily_compare_veg, aes(x = DoY, y = Reco_cum, color = Site)) +
+    geom_line(linewidth = 1) +
+    scale_color_manual(values = pal_site) +
+    labs(
+      title = "Cumulative Reco: Moscow vs Kursk",
+      x = "Day of Year",
+      y = expression("Cumulative Reco (g C"~m^{-2}*")")
+    ) +
+    theme_flux
+
+  # Print all comparison plots
+  print(plot_compare_diurnal_NEE)
+  print(plot_compare_diurnal_GPP)
+  print(plot_compare_diurnal_Reco)
+  print(plot_compare_light)
+  print(plot_compare_WUE)
+  print(plot_compare_cum_NEE)
+  print(plot_compare_cum_GPP)
+  print(plot_compare_cum_Reco)
+
+  # Print coefficients comparison
+  cat("\n========================================\n")
+  cat("LIGHT CURVE COEFFICIENTS: Moscow vs Kursk\n")
+  cat("========================================\n")
+  print(coef_compare %>% arrange(Phase_ru, Site))
+
+  # Save comparison data
+  write.csv(coef_compare, "output_Kursk/compare_light_curve_coefficients.csv", row.names = FALSE)
+  write.csv(Daily_compare_veg, "output_Kursk/compare_daily_cumulative.csv", row.names = FALSE)
+
+  cat("\nComparative analysis completed.\n")
+
+} else {
+  cat("\nWarning: Moscow data file not found:", moscow_file, "\n")
+  cat("Skipping comparative analysis.\n")
+}
