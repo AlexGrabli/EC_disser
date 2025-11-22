@@ -139,6 +139,15 @@ get_label <- function(key, lang = "ru") {
   LABELS[[lang]][[key]]
 }
 
+# Функция для сохранения графика на двух языках
+save_bilingual <- function(plot_func, base_name, width = 10, height = 6, dpi = 300) {
+  for (lang in c("ru", "en")) {
+    p <- plot_func(lang)
+    fname <- paste0(base_name, "_", lang, ".png")
+    ggsave(fname, p, width = width, height = height, dpi = dpi, bg = "white")
+  }
+}
+
 # ----------------------- Утилиты -----------------------
 to_num <- function(x){
   if (is.numeric(x)) return(x)
@@ -1583,32 +1592,34 @@ print(p_wue_year)
 cat("\n\nПостроение дополнительных графиков WUE и iWUE...\n")
 
 # ----- Boxplot WUE по фенофазам (сравнение между годами) -----
-p_wue_boxplot_compare <- ggplot(w_all, aes(x = Phase_lab, y = WUE, fill = factor(Year))) +
-  geom_boxplot(alpha = 0.7, outlier.size = 0.5) +
-  scale_fill_manual(values = pal_year, name = "Год") +
-  labs(title = "WUE по фенофазам — сравнение между годами",
-       x = "Фенофаза", y = "WUE (μmol CO₂ / mmol H₂O)") +
-  theme_bw(base_size = 12) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        panel.grid.minor = element_blank())
-
-print(p_wue_boxplot_compare)
-ggsave("WUE_boxplot_compare_years.png", p_wue_boxplot_compare, width = 12, height = 6, dpi = 300, bg = "white")
-
-# ----- Boxplot iWUE по фенофазам (сравнение между годами) -----
-if (sum(is.finite(w_all$IWUE)) > 10) {
-  p_iwue_boxplot_compare <- ggplot(w_all %>% filter(is.finite(IWUE)),
-                                    aes(x = Phase_lab, y = IWUE, fill = factor(Year))) +
+make_wue_boxplot_compare <- function(lang) {
+  L <- LABELS[[lang]]
+  ggplot(w_all, aes(x = Phase_lab, y = WUE, fill = factor(Year))) +
     geom_boxplot(alpha = 0.7, outlier.size = 0.5) +
-    scale_fill_manual(values = pal_year, name = "Год") +
-    labs(title = "iWUE по фенофазам — сравнение между годами",
-         x = "Фенофаза", y = "iWUE (μmol CO₂ kPa / mmol H₂O)") +
+    scale_fill_manual(values = pal_year, name = L$year) +
+    labs(title = L$wue_comparison,
+         x = L$phenophase, y = paste0("WUE (", L$wue_unit, ")")) +
     theme_bw(base_size = 12) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1),
           panel.grid.minor = element_blank())
+}
+save_bilingual(make_wue_boxplot_compare, "WUE_boxplot_compare_years", width = 12, height = 6)
 
-  print(p_iwue_boxplot_compare)
-  ggsave("iWUE_boxplot_compare_years.png", p_iwue_boxplot_compare, width = 12, height = 6, dpi = 300, bg = "white")
+# ----- Boxplot iWUE по фенофазам (сравнение между годами) -----
+if (sum(is.finite(w_all$IWUE)) > 10) {
+  make_iwue_boxplot_compare <- function(lang) {
+    L <- LABELS[[lang]]
+    ggplot(w_all %>% filter(is.finite(IWUE)),
+           aes(x = Phase_lab, y = IWUE, fill = factor(Year))) +
+      geom_boxplot(alpha = 0.7, outlier.size = 0.5) +
+      scale_fill_manual(values = pal_year, name = L$year) +
+      labs(title = L$iwue_comparison,
+           x = L$phenophase, y = paste0("iWUE (", L$iwue_unit, ")")) +
+      theme_bw(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            panel.grid.minor = element_blank())
+  }
+  save_bilingual(make_iwue_boxplot_compare, "iWUE_boxplot_compare_years", width = 12, height = 6)
 }
 
 # ----- Barplot WUE для каждого года отдельно -----
@@ -1737,41 +1748,45 @@ for (yr in c(2013, 2016, 2023)) {
 # ----- Сравнительные графики GPP vs VPD между годами -----
 w_all_vpd <- w_all %>% filter(is.finite(VPD), is.finite(GPP))
 if (nrow(w_all_vpd) > 30) {
-  p_vpd_compare <- ggplot(w_all_vpd, aes(x = VPD, y = GPP, color = factor(Year))) +
-    geom_point(alpha = 0.2, size = 0.5) +
-    geom_smooth(method = "loess", se = FALSE, linewidth = 1) +
-    facet_wrap(~Phase_lab, ncol = 3, scales = "free") +
-    scale_color_manual(values = pal_year, name = "Год") +
-    labs(title = "Зависимость GPP от VPD — сравнение по годам",
-         x = "VPD (kPa)", y = "GPP (μmol CO₂ m⁻² s⁻¹)") +
-    theme_bw(base_size = 11) +
-    theme(panel.grid.minor = element_blank(),
-          strip.background = element_rect(fill = "grey95"))
-
-  print(p_vpd_compare)
-  ggsave("GPP_vs_VPD_compare_years.png", p_vpd_compare, width = 12, height = 8, dpi = 300, bg = "white")
+  make_gpp_vpd_compare <- function(lang) {
+    L <- LABELS[[lang]]
+    ggplot(w_all_vpd, aes(x = VPD, y = GPP, color = factor(Year))) +
+      geom_point(alpha = 0.2, size = 0.5) +
+      geom_smooth(method = "loess", se = FALSE, linewidth = 1) +
+      facet_wrap(~Phase_lab, ncol = 3, scales = "free") +
+      scale_color_manual(values = pal_year, name = L$year) +
+      labs(title = L$gpp_vs_vpd,
+           x = paste0("VPD (", L$vpd_unit, ")"),
+           y = paste0("GPP (", L$flux_unit, ")")) +
+      theme_bw(base_size = 11) +
+      theme(panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey95"))
+  }
+  save_bilingual(make_gpp_vpd_compare, "GPP_vs_VPD_compare_years", width = 12, height = 8)
 }
 
 # ----- Сравнительные графики GPP vs PPFD между годами -----
 w_all_ppfd <- w_all %>% filter(is.finite(PPFD), is.finite(GPP), PPFD > 10)
 if (nrow(w_all_ppfd) > 30) {
-  p_ppfd_compare <- ggplot(w_all_ppfd, aes(x = PPFD, y = GPP, color = factor(Year))) +
-    geom_point(alpha = 0.2, size = 0.5) +
-    geom_smooth(method = "loess", se = FALSE, linewidth = 1) +
-    facet_wrap(~Phase_lab, ncol = 3, scales = "free") +
-    scale_color_manual(values = pal_year, name = "Год") +
-    labs(title = "Зависимость GPP от PPFD — сравнение по годам",
-         subtitle = "Световые кривые фотосинтеза",
-         x = "PPFD (μmol m⁻² s⁻¹)", y = "GPP (μmol CO₂ m⁻² s⁻¹)") +
-    theme_bw(base_size = 11) +
-    theme(panel.grid.minor = element_blank(),
-          strip.background = element_rect(fill = "grey95"))
-
-  print(p_ppfd_compare)
-  ggsave("GPP_vs_PPFD_compare_years.png", p_ppfd_compare, width = 12, height = 8, dpi = 300, bg = "white")
+  make_gpp_ppfd_compare <- function(lang) {
+    L <- LABELS[[lang]]
+    ggplot(w_all_ppfd, aes(x = PPFD, y = GPP, color = factor(Year))) +
+      geom_point(alpha = 0.2, size = 0.5) +
+      geom_smooth(method = "loess", se = FALSE, linewidth = 1) +
+      facet_wrap(~Phase_lab, ncol = 3, scales = "free") +
+      scale_color_manual(values = pal_year, name = L$year) +
+      labs(title = L$gpp_vs_ppfd,
+           subtitle = L$light_curves,
+           x = paste0("PPFD (", L$ppfd_unit, ")"),
+           y = paste0("GPP (", L$flux_unit, ")")) +
+      theme_bw(base_size = 11) +
+      theme(panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey95"))
+  }
+  save_bilingual(make_gpp_ppfd_compare, "GPP_vs_PPFD_compare_years", width = 12, height = 8)
 }
 
-cat("\n✓ Графики WUE, iWUE, GPP vs VPD, GPP vs PPFD сохранены!\n")
+cat("\n✓ Графики WUE, iWUE, GPP vs VPD, GPP vs PPFD сохранены (RU и EN версии)!\n")
 
 # ==============================================================================
 # РАСЧЕТ КУМУЛЯТИВНЫХ СУММ ЗА ВЕГЕТАЦИОННЫЙ ПЕРИОД
