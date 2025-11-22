@@ -966,13 +966,18 @@ if (file.exists(moscow_file)) {
     ) +
     theme_flux
 
-  # Diurnal GPP comparison
+  # Diurnal GPP comparison (Kursk Всходы as dashed line due to limited data)
+  hourly_gpp_main <- Hourly_compare %>% filter(!(Site == "Kursk" & Phase_ru == "Всходы"))
+  hourly_gpp_dashed <- Hourly_compare %>% filter(Site == "Kursk" & Phase_ru == "Всходы")
+
   plot_compare_diurnal_GPP <- ggplot(Hourly_compare,
                                      aes(x = HourInt, y = GPP_mean, color = Site, fill = Site)) +
     geom_ribbon(aes(ymin = GPP_mean - 1.96*GPP_se, ymax = GPP_mean + 1.96*GPP_se),
                 alpha = 0.15, color = NA) +
-    geom_line(linewidth = 1) +
-    geom_point(size = 1.2) +
+    geom_line(data = hourly_gpp_main, linewidth = 1) +
+    geom_point(data = hourly_gpp_main, size = 1.2) +
+    geom_line(data = hourly_gpp_dashed, linewidth = 0.7, linetype = "dashed") +
+    geom_point(data = hourly_gpp_dashed, size = 1.2) +
     facet_wrap(~Phase_ru, ncol = 3) +
     scale_color_manual(values = pal_site) +
     scale_fill_manual(values = pal_site) +
