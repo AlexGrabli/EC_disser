@@ -46,12 +46,12 @@ phenophase_data <- tryCatch({
   NULL
 })
 
-# Define phenophase boundaries by DoY (default values for Kursk 2013)
-# These will be overwritten if found in xlsx
+# Define phenophase boundaries by DoY (Kursk 2013)
+# Sowing: DoY 115, Harvesting: DoY 226
 phase_bounds <- data.frame(
   Phase_ru = factor(PHASE_RU, levels = PHASE_RU),
   Phase_en = factor(PHASE_EN, levels = PHASE_EN),
-  DoY_start = c(115, 136, 157, 165, 180, 196)  # Kursk phenophase dates
+  DoY_start = c(118, 136, 157, 165, 180, 196)  # Kursk phenophase dates
 )
 
 # Function to assign phenophase based on DoY
@@ -557,8 +557,8 @@ plot_GPP_PPFD <- ggplot(Results %>%
 # -----------------------------------------------------------------------------
 
 # Define vegetation period (from sowing to harvest)
-veg_start <- min(phase_bounds$DoY_start)  # Start of first phenophase
-veg_end <- max(phase_bounds$DoY_start) + 20  # End of last phenophase + buffer for ripening
+veg_start <- 115  # Sowing date for Kursk
+veg_end <- 226    # Harvesting date for Kursk
 
 # Filter daily data to vegetation period and recalculate cumulative sums
 Daily_veg <- Daily %>%
@@ -858,8 +858,10 @@ if (file.exists(moscow_file)) {
   moscow_raw$datetime <- moscow_raw$datetime + 3 * 3600
 
   # Moscow phenophase boundaries (2013)
+  # Sowing: 2013-05-14 (DoY 134)
   B_Moscow <- list(
-    Emergence = as.Date("2013-05-14"), Tillering = as.Date("2013-06-03"),
+    Sowing = as.Date("2013-05-14"),
+    Emergence = as.Date("2013-05-17"), Tillering = as.Date("2013-06-03"),
     StemElong = as.Date("2013-06-27"), Heading = as.Date("2013-07-17"),
     Flowering = as.Date("2013-07-28"), Ripening = as.Date("2013-08-03"),
     Harvesting = as.Date("2013-08-14")
@@ -869,12 +871,12 @@ if (file.exists(moscow_file)) {
   assign_phase_moscow <- function(date_vec) {
     res <- rep(NA_character_, length(date_vec))
     d <- as.Date(date_vec)
-    res[d >= B_Moscow$Emergence & d < B_Moscow$Tillering] <- "Всходы"
-    res[d >= B_Moscow$Tillering & d < B_Moscow$StemElong] <- "Кущение"
-    res[d >= B_Moscow$StemElong & d < B_Moscow$Heading] <- "Выход в трубку"
-    res[d >= B_Moscow$Heading & d < B_Moscow$Flowering] <- "Колошение"
-    res[d >= B_Moscow$Flowering & d < B_Moscow$Ripening] <- "Цветение"
-    res[d >= B_Moscow$Ripening & d <= B_Moscow$Harvesting] <- "Созревание"
+    res[d >= B_Moscow$Emergence & d < B_Moscow$Tillering] <- "Всходы"        # May 17 - Jun 2
+    res[d >= B_Moscow$Tillering & d < B_Moscow$StemElong] <- "Кущение"       # Jun 3 - Jun 26
+    res[d >= B_Moscow$StemElong & d < B_Moscow$Heading] <- "Выход в трубку"  # Jun 27 - Jul 16
+    res[d >= B_Moscow$Heading & d < B_Moscow$Flowering] <- "Колошение"       # Jul 17 - Jul 27
+    res[d >= B_Moscow$Flowering & d < B_Moscow$Ripening] <- "Цветение"       # Jul 28 - Aug 2
+    res[d >= B_Moscow$Ripening & d <= B_Moscow$Harvesting] <- "Созревание"   # Aug 3 - Aug 14
     factor(res, levels = PHASE_RU)
   }
 
@@ -1135,8 +1137,8 @@ if (file.exists(moscow_file)) {
   # -----------------------------------------------------------------------------
 
   # Sowing dates for each site
-  sowing_Moscow <- yday(as.Date("2013-05-05"))  # DoY 125
-  sowing_Kursk <- 105  # Approximate sowing date for Kursk (mid-April)
+  sowing_Moscow <- yday(as.Date("2013-05-14"))  # DoY 134
+  sowing_Kursk <- 115  # Sowing date for Kursk
 
   # Daily aggregation for both sites
   Daily_compare <- Compare %>%
@@ -1169,18 +1171,18 @@ if (file.exists(moscow_file)) {
   phase_DAS_Moscow <- data.frame(
     Phase_ru = PHASE_RU,
     Phase_en = PHASE_EN,
-    DAS = c(yday(as.Date("2013-05-14")) - sowing_Moscow,
-            yday(as.Date("2013-06-03")) - sowing_Moscow,
-            yday(as.Date("2013-06-27")) - sowing_Moscow,
-            yday(as.Date("2013-07-17")) - sowing_Moscow,
-            yday(as.Date("2013-07-28")) - sowing_Moscow,
-            yday(as.Date("2013-08-03")) - sowing_Moscow)
+    DAS = c(yday(as.Date("2013-05-17")) - sowing_Moscow,  # Emergence
+            yday(as.Date("2013-06-03")) - sowing_Moscow,  # Tillering
+            yday(as.Date("2013-06-27")) - sowing_Moscow,  # StemElong
+            yday(as.Date("2013-07-17")) - sowing_Moscow,  # Heading
+            yday(as.Date("2013-07-28")) - sowing_Moscow,  # Flowering
+            yday(as.Date("2013-08-03")) - sowing_Moscow)  # Ripening
   )
 
   phase_DAS_Kursk <- data.frame(
     Phase_ru = PHASE_RU,
     Phase_en = PHASE_EN,
-    DAS = c(115, 136, 157, 165, 180, 196) - sowing_Kursk
+    DAS = c(118, 136, 157, 165, 180, 196) - sowing_Kursk
   )
 
   # Use average phenophase timing for comparison plots
