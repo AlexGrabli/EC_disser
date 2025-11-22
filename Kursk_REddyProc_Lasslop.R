@@ -1082,12 +1082,17 @@ if (file.exists(moscow_file)) {
     ) %>%
     ungroup()
 
-  # Plot light curves comparison
+  # Plot light curves comparison (Kursk Всходы as dashed due to limited data)
+  curve_main <- curve_compare %>% filter(!(Site == "Kursk" & Phase_ru == "Всходы"))
+  curve_dashed <- curve_compare %>% filter(Site == "Kursk" & Phase_ru == "Всходы")
+
   plot_compare_light <- ggplot() +
     geom_point(data = light_compare, aes(x = PPFD, y = GPP, color = Site),
                alpha = 0.05, size = 0.3) +
-    geom_line(data = curve_compare, aes(x = PPFD, y = GPP_hat, color = Site),
+    geom_line(data = curve_main, aes(x = PPFD, y = GPP_hat, color = Site),
               linewidth = 1) +
+    geom_line(data = curve_dashed, aes(x = PPFD, y = GPP_hat, color = Site),
+              linewidth = 0.7, linetype = "dashed") +
     geom_text(data = anno_compare, aes(x = x, y = y, label = label, color = Site),
               hjust = 0, vjust = 1, size = 2.5, show.legend = FALSE) +
     facet_wrap(~Phase_ru, ncol = 3) +
@@ -1129,6 +1134,10 @@ if (file.exists(moscow_file)) {
   # 8.4 Comparative Cumulative Fluxes
   # -----------------------------------------------------------------------------
 
+  # Sowing dates for each site
+  sowing_Moscow <- yday(as.Date("2013-05-05"))  # DoY 125
+  sowing_Kursk <- 105  # Approximate sowing date for Kursk (mid-April)
+
   # Daily aggregation for both sites
   Daily_compare <- Compare %>%
     mutate(Date = as.Date(DateTime)) %>%
@@ -1140,8 +1149,11 @@ if (file.exists(moscow_file)) {
       Reco_sum = sum(Reco, na.rm = TRUE) * 12 * 1800 / 10^6,
       .groups = "drop"
     ) %>%
+    mutate(
+      DAS = ifelse(Site == "Moscow", DoY - sowing_Moscow, DoY - sowing_Kursk)
+    ) %>%
     group_by(Site) %>%
-    arrange(DoY) %>%
+    arrange(DAS) %>%
     mutate(
       NEE_cum = cumsum(NEE_sum),
       GPP_cum = cumsum(GPP_sum),
@@ -1149,40 +1161,134 @@ if (file.exists(moscow_file)) {
     ) %>%
     ungroup()
 
-  # Filter to vegetation period
+  # Filter to vegetation period (days from sowing)
   Daily_compare_veg <- Daily_compare %>%
-    filter(DoY >= 130 & DoY <= 230)
+    filter(DAS >= 0 & DAS <= 120)
 
-  # Cumulative NEE comparison
-  plot_compare_cum_NEE <- ggplot(Daily_compare_veg, aes(x = DoY, y = NEE_cum, color = Site)) +
+  # Phenophase boundaries in days after sowing
+  phase_DAS_Moscow <- data.frame(
+    Phase_ru = PHASE_RU,
+    Phase_en = PHASE_EN,
+    DAS = c(yday(as.Date("2013-05-14")) - sowing_Moscow,
+            yday(as.Date("2013-06-03")) - sowing_Moscow,
+            yday(as.Date("2013-06-27")) - sowing_Moscow,
+            yday(as.Date("2013-07-17")) - sowing_Moscow,
+            yday(as.Date("2013-07-28")) - sowing_Moscow,
+            yday(as.Date("2013-08-03")) - sowing_Moscow)
+  )
+
+  phase_DAS_Kursk <- data.frame(
+    Phase_ru = PHASE_RU,
+    Phase_en = PHASE_EN,
+    DAS = c(115, 136, 157, 165, 180, 196) - sowing_Kursk
+  )
+
+  # Use average phenophase timing for comparison plots
+  phase_DAS_avg <- data.frame(
+    Phase_ru = PHASE_RU,
+    Phase_en = PHASE_EN,
+    DAS = (phase_DAS_Moscow$DAS + phase_DAS_Kursk$DAS) / 2
+  )
+
+  # Russian version of cumulative plots
+  plot_compare_cum_NEE_ru <- ggplot(Daily_compare_veg, aes(x = DAS, y = NEE_cum, color = Site)) +
     geom_line(linewidth = 1) +
     geom_hline(yintercept = 0, linetype = 2) +
+    geom_vline(data = phase_DAS_avg, aes(xintercept = DAS),
+               linetype = "dotted", color = "gray40", linewidth = 0.5) +
+    geom_text(data = phase_DAS_avg,
+              aes(x = DAS + 1, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.9,
+                  label = Phase_ru),
+              angle = 90, hjust = 1, vjust = 0, size = 2.5, color = "gray30") +
+    scale_color_manual(values = pal_site, labels = c("Курск", "Москва")) +
+    labs(
+      title = "Кумулятивный NEE: Москва vs Курск",
+      x = "Дни от посева",
+      y = expression("Кумулятивный NEE (g C"~m^{-2}*")"),
+      color = "Участок"
+    ) +
+    theme_flux
+
+  plot_compare_cum_GPP_ru <- ggplot(Daily_compare_veg, aes(x = DAS, y = GPP_cum, color = Site)) +
+    geom_line(linewidth = 1) +
+    geom_vline(data = phase_DAS_avg, aes(xintercept = DAS),
+               linetype = "dotted", color = "gray40", linewidth = 0.5) +
+    geom_text(data = phase_DAS_avg,
+              aes(x = DAS + 1, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.9,
+                  label = Phase_ru),
+              angle = 90, hjust = 1, vjust = 0, size = 2.5, color = "gray30") +
+    scale_color_manual(values = pal_site, labels = c("Курск", "Москва")) +
+    labs(
+      title = "Кумулятивный GPP: Москва vs Курск",
+      x = "Дни от посева",
+      y = expression("Кумулятивный GPP (g C"~m^{-2}*")"),
+      color = "Участок"
+    ) +
+    theme_flux
+
+  plot_compare_cum_Reco_ru <- ggplot(Daily_compare_veg, aes(x = DAS, y = Reco_cum, color = Site)) +
+    geom_line(linewidth = 1) +
+    geom_vline(data = phase_DAS_avg, aes(xintercept = DAS),
+               linetype = "dotted", color = "gray40", linewidth = 0.5) +
+    geom_text(data = phase_DAS_avg,
+              aes(x = DAS + 1, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.9,
+                  label = Phase_ru),
+              angle = 90, hjust = 1, vjust = 0, size = 2.5, color = "gray30") +
+    scale_color_manual(values = pal_site, labels = c("Курск", "Москва")) +
+    labs(
+      title = "Кумулятивный Reco: Москва vs Курск",
+      x = "Дни от посева",
+      y = expression("Кумулятивный Reco (g C"~m^{-2}*")"),
+      color = "Участок"
+    ) +
+    theme_flux
+
+  # English version of cumulative plots
+  plot_compare_cum_NEE_en <- ggplot(Daily_compare_veg, aes(x = DAS, y = NEE_cum, color = Site)) +
+    geom_line(linewidth = 1) +
+    geom_hline(yintercept = 0, linetype = 2) +
+    geom_vline(data = phase_DAS_avg, aes(xintercept = DAS),
+               linetype = "dotted", color = "gray40", linewidth = 0.5) +
+    geom_text(data = phase_DAS_avg,
+              aes(x = DAS + 1, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.9,
+                  label = Phase_en),
+              angle = 90, hjust = 1, vjust = 0, size = 2.5, color = "gray30") +
     scale_color_manual(values = pal_site) +
     labs(
       title = "Cumulative NEE: Moscow vs Kursk",
-      x = "Day of Year",
+      x = "Days after sowing",
       y = expression("Cumulative NEE (g C"~m^{-2}*")")
     ) +
     theme_flux
 
-  # Cumulative GPP comparison
-  plot_compare_cum_GPP <- ggplot(Daily_compare_veg, aes(x = DoY, y = GPP_cum, color = Site)) +
+  plot_compare_cum_GPP_en <- ggplot(Daily_compare_veg, aes(x = DAS, y = GPP_cum, color = Site)) +
     geom_line(linewidth = 1) +
+    geom_vline(data = phase_DAS_avg, aes(xintercept = DAS),
+               linetype = "dotted", color = "gray40", linewidth = 0.5) +
+    geom_text(data = phase_DAS_avg,
+              aes(x = DAS + 1, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.9,
+                  label = Phase_en),
+              angle = 90, hjust = 1, vjust = 0, size = 2.5, color = "gray30") +
     scale_color_manual(values = pal_site) +
     labs(
       title = "Cumulative GPP: Moscow vs Kursk",
-      x = "Day of Year",
+      x = "Days after sowing",
       y = expression("Cumulative GPP (g C"~m^{-2}*")")
     ) +
     theme_flux
 
-  # Cumulative Reco comparison
-  plot_compare_cum_Reco <- ggplot(Daily_compare_veg, aes(x = DoY, y = Reco_cum, color = Site)) +
+  plot_compare_cum_Reco_en <- ggplot(Daily_compare_veg, aes(x = DAS, y = Reco_cum, color = Site)) +
     geom_line(linewidth = 1) +
+    geom_vline(data = phase_DAS_avg, aes(xintercept = DAS),
+               linetype = "dotted", color = "gray40", linewidth = 0.5) +
+    geom_text(data = phase_DAS_avg,
+              aes(x = DAS + 1, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.9,
+                  label = Phase_en),
+              angle = 90, hjust = 1, vjust = 0, size = 2.5, color = "gray30") +
     scale_color_manual(values = pal_site) +
     labs(
       title = "Cumulative Reco: Moscow vs Kursk",
-      x = "Day of Year",
+      x = "Days after sowing",
       y = expression("Cumulative Reco (g C"~m^{-2}*")")
     ) +
     theme_flux
@@ -1193,9 +1299,14 @@ if (file.exists(moscow_file)) {
   print(plot_compare_diurnal_Reco)
   print(plot_compare_light)
   print(plot_compare_WUE)
-  print(plot_compare_cum_NEE)
-  print(plot_compare_cum_GPP)
-  print(plot_compare_cum_Reco)
+  # Russian cumulative plots
+  print(plot_compare_cum_NEE_ru)
+  print(plot_compare_cum_GPP_ru)
+  print(plot_compare_cum_Reco_ru)
+  # English cumulative plots
+  print(plot_compare_cum_NEE_en)
+  print(plot_compare_cum_GPP_en)
+  print(plot_compare_cum_Reco_en)
 
   # Print coefficients comparison
   cat("\n========================================\n")
