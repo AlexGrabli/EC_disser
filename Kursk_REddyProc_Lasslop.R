@@ -237,6 +237,18 @@ Results$IWUE <- ifelse(Results$E_mmol > 0.01 & !is.na(Results$GPP_DT) & Results$
 # GPP_DT and Reco_DT are the partitioned fluxes from Lasslop method
 
 # =============================================================================
+# 3.1 SAVE PROCESSED DATA TO CSV
+# =============================================================================
+
+# Create output directory
+dir.create("output_Kursk", showWarnings = FALSE)
+
+# Save processed half-hourly data
+write.csv(Results, "output_Kursk/Kursk_REddyProc_halfhourly.csv", row.names = FALSE)
+cat("\nProcessed data saved to: output_Kursk/Kursk_REddyProc_halfhourly.csv\n")
+cat("Total records:", nrow(Results), "\n")
+
+# =============================================================================
 # 4. CALCULATE DERIVED VARIABLES
 # =============================================================================
 
@@ -764,12 +776,9 @@ plot_Reco_temp <- ggplot(Results %>% filter(!is.na(Reco_DT) & Reco_DT > 0),
 # 6. SAVE OUTPUTS
 # =============================================================================
 
-# Create output directory
-dir.create("output_Kursk", showWarnings = FALSE)
-
-# Save processed data
-write.csv(Results, "output_Kursk/Kursk_REddyProc_results_halfhourly.csv", row.names = FALSE)
-write.csv(Daily, "output_Kursk/Kursk_REddyProc_results_daily.csv", row.names = FALSE)
+# Save daily aggregated data
+write.csv(Daily, "output_Kursk/Kursk_REddyProc_daily.csv", row.names = FALSE)
+write.csv(coef_tbl, "output_Kursk/Kursk_light_curve_coefficients.csv", row.names = FALSE)
 
 # Display all plots
 print(plot_diurnal_NEE)
@@ -1197,6 +1206,15 @@ if (file.exists(moscow_file)) {
   # Save comparison data
   write.csv(coef_compare, "output_Kursk/compare_light_curve_coefficients.csv", row.names = FALSE)
   write.csv(Daily_compare_veg, "output_Kursk/compare_daily_cumulative.csv", row.names = FALSE)
+
+  # Save combined half-hourly data (Moscow + Kursk)
+  Compare_export <- Compare %>%
+    select(Site, DateTime, DoY, Hour, Phase_ru, NEE, GPP, Reco, LE, Rg, PPFD, WUE) %>%
+    arrange(Site, DateTime)
+  write.csv(Compare_export, "output_Kursk/Moscow_Kursk_combined_halfhourly.csv", row.names = FALSE)
+  cat("\nCombined data saved to: output_Kursk/Moscow_Kursk_combined_halfhourly.csv\n")
+  cat("Moscow records:", sum(Compare_export$Site == "Moscow"), "\n")
+  cat("Kursk records:", sum(Compare_export$Site == "Kursk"), "\n")
 
   cat("\nComparative analysis completed.\n")
 
