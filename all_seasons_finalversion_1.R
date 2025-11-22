@@ -36,6 +36,109 @@ B2023 <- list(
   Ripening="2023-08-06", Harvesting="2023-08-31"
 )
 
+# ----------------------- Словарь подписей для графиков -----------------------
+# Двуязычные подписи: RU и EN версии
+LABELS <- list(
+  ru = list(
+    # Фенофазы
+    phases = c("Всходы", "Кущение", "Выход в трубку", "Колошение", "Цветение", "Созревание"),
+
+    # Оси
+    year = "Год",
+    date = "Дата",
+    hour = "Час суток",
+    days_from_sowing = "Дни от сева",
+    phenophase = "Фенофаза",
+
+    # Переменные
+    gpp = "GPP",
+    reco = "Reco",
+    nee = "NEE",
+    wue = "WUE",
+    iwue = "iWUE",
+    vpd = "VPD",
+    ppfd = "PPFD",
+    gdd = "Сумма активных температур",
+
+    # Единицы измерения
+    flux_unit = "мкмоль CO₂ м⁻² с⁻¹",
+    wue_unit = "мкмоль CO₂ / ммоль H₂O",
+    iwue_unit = "мкмоль CO₂ кПа / ммоль H₂O",
+    vpd_unit = "кПа",
+    ppfd_unit = "мкмоль м⁻² с⁻¹",
+    gdd_unit = "°C·день",
+    cumulative_c_unit = "г C м⁻²",
+
+    # Заголовки графиков
+    diurnal_title = "Суточный ход",
+    wue_by_phase = "WUE по фенофазам",
+    iwue_by_phase = "iWUE по фенофазам",
+    wue_comparison = "WUE — сравнение между годами",
+    iwue_comparison = "iWUE — сравнение между годами",
+    gpp_vs_vpd = "Зависимость GPP от VPD по фенофазам",
+    gpp_vs_ppfd = "Зависимость GPP от PPFD по фенофазам",
+    cumulative_gpp = "Кумулятивный GPP по дням вегетационного периода",
+    cumulative_reco = "Кумулятивный Reco по дням вегетационного периода",
+    cumulative_nee = "Кумулятивный NEE по дням вегетационного периода",
+    cumulative_gdd = "Кумулятивная сумма активных температур >10°C",
+    light_curves = "Световые кривые фотосинтеза",
+    phase_lines_note = "Вертикальные линии — начало фенофаз",
+    nee_note = "Отрицательные значения = поглощение CO₂"
+  ),
+
+  en = list(
+    # Phenophases
+    phases = c("Emergence", "Tillering", "Stem elongation", "Heading", "Flowering", "Ripening"),
+
+    # Axes
+    year = "Year",
+    date = "Date",
+    hour = "Hour of day",
+    days_from_sowing = "Days from sowing",
+    phenophase = "Phenophase",
+
+    # Variables
+    gpp = "GPP",
+    reco = "Reco",
+    nee = "NEE",
+    wue = "WUE",
+    iwue = "iWUE",
+    vpd = "VPD",
+    ppfd = "PPFD",
+    gdd = "Growing degree days",
+
+    # Units
+    flux_unit = "µmol CO₂ m⁻² s⁻¹",
+    wue_unit = "µmol CO₂ / mmol H₂O",
+    iwue_unit = "µmol CO₂ kPa / mmol H₂O",
+    vpd_unit = "kPa",
+    ppfd_unit = "µmol m⁻² s⁻¹",
+    gdd_unit = "°C·day",
+    cumulative_c_unit = "g C m⁻²",
+
+    # Plot titles
+    diurnal_title = "Diurnal pattern",
+    wue_by_phase = "WUE by phenophase",
+    iwue_by_phase = "iWUE by phenophase",
+    wue_comparison = "WUE — comparison between years",
+    iwue_comparison = "iWUE — comparison between years",
+    gpp_vs_vpd = "GPP vs VPD by phenophase",
+    gpp_vs_ppfd = "GPP vs PPFD by phenophase",
+    cumulative_gpp = "Cumulative GPP by days of growing season",
+    cumulative_reco = "Cumulative Reco by days of growing season",
+    cumulative_nee = "Cumulative NEE by days of growing season",
+    cumulative_gdd = "Cumulative growing degree days >10°C",
+    light_curves = "Light response curves",
+    phase_lines_note = "Vertical lines indicate phenophase onset",
+    nee_note = "Negative values indicate CO₂ absorption"
+  )
+)
+
+# Функция для получения подписи
+get_label <- function(key, lang = "ru") {
+  LABELS[[lang]][[key]]
+}
+
 # ----------------------- Утилиты -----------------------
 to_num <- function(x){
   if (is.numeric(x)) return(x)
@@ -358,7 +461,7 @@ stopifnot(file.exists(f2013), file.exists(f2016))
 raw13 <- readr::read_csv(f2013, show_col_types = FALSE, guess_max = 1e6) |> clean_names()
 raw16 <- readr::read_csv(f2016, show_col_types = FALSE, guess_max = 1e6) |> clean_names()
 
-df13 <- build_year_df(raw13, 2013, B2013, tz_in="UTC", shift_hours=0L) 
+df13 <- build_year_df(raw13, 2013, B2013, tz_in="UTC", shift_hours=-3L)  # MSK→UTC
 df16 <- build_year_df(raw16, 2016, B2016, tz_in="UTC", shift_hours=0L)
 
 # Диагностика (можно закомментировать):
@@ -663,8 +766,8 @@ attach_ppfd <- function(df, ppfd_lookup){
 file_2013 <- "Lasslop_2013_Complete_GapFilled.csv"
 file_2016 <- "Moscow_2016_verFin.csv"
 
-# 2013: в исходнике время было в UTC → сдвигаем к МСК +3 ч
-pp2013 <- build_ppfd_lookup(file_2013, year = 2013, tz_in = "UTC", shift_hours = 0L)
+# 2013: в исходнике время в МСК → сдвигаем к UTC -3 ч
+pp2013 <- build_ppfd_lookup(file_2013, year = 2013, tz_in = "UTC", shift_hours = -3L)
 df13   <- attach_ppfd(df13, pp2013)
 
 # 2016: как правило уже локальное/UTC без сдвига
