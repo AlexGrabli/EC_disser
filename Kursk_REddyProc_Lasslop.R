@@ -844,15 +844,25 @@ cat("COMPARATIVE ANALYSIS: Moscow 2013 vs Kursk\n")
 cat("========================================\n")
 
 # Load Moscow 2013 data
-moscow_file <- "eddyproc_partitioned_2013.csv"
+moscow_file <- "Lasslop_2013_Complete_GapFilled.csv"
 if (file.exists(moscow_file)) {
 
   # Read Moscow data
   moscow_raw <- fread(moscow_file)
   names(moscow_raw) <- tolower(names(moscow_raw))
 
-  # Parse time (ISO format: 2013-04-30T20:30:00Z)
-  moscow_raw$datetime <- as.POSIXct(moscow_raw$datetime, format = "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+  # Parse time - try multiple formats
+  if ("timestamp_start" %in% names(moscow_raw)) {
+    # Format: YYYYMMDDhhmm
+    moscow_raw$datetime <- as.POSIXct(moscow_raw$timestamp_start, format = "%Y%m%d%H%M", tz = "UTC")
+  } else if ("datetime" %in% names(moscow_raw)) {
+    # Try ISO format first
+    moscow_raw$datetime <- as.POSIXct(moscow_raw$datetime, format = "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+    if (all(is.na(moscow_raw$datetime))) {
+      # Try standard format
+      moscow_raw$datetime <- as.POSIXct(moscow_raw$datetime, format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
+    }
+  }
 
   # NOTE: No time shift for Moscow data - timestamps already in correct local time
   # (matching all_seasons_finalversion_1.R approach)
