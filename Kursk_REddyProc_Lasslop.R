@@ -560,10 +560,16 @@ plot_GPP_PPFD <- ggplot(Results %>%
 veg_start <- 115  # Sowing date for Kursk
 veg_end <- 226    # Harvesting date for Kursk
 
-# Filter daily data to vegetation period and recalculate cumulative sums
-Daily_veg <- Daily %>%
-  filter(DoY >= veg_start & DoY <= veg_end) %>%
+# Create complete sequence of days from sowing to harvest
+complete_days <- data.frame(DoY = seq(veg_start, veg_end))
+
+# Filter daily data to vegetation period and fill missing days with zeros
+Daily_veg <- complete_days %>%
+  left_join(Daily, by = "DoY") %>%
   mutate(
+    NEE_sum = ifelse(is.na(NEE_sum), 0, NEE_sum),
+    GPP_sum = ifelse(is.na(GPP_sum), 0, GPP_sum),
+    Reco_sum = ifelse(is.na(Reco_sum), 0, Reco_sum),
     NEE_cum = cumsum(NEE_sum),
     GPP_cum = cumsum(GPP_sum),
     Reco_cum = cumsum(Reco_sum)
@@ -1151,7 +1157,7 @@ if (file.exists(moscow_file)) {
   sowing_Kursk <- 115  # Sowing date for Kursk
 
   # Daily aggregation for both sites
-  Daily_compare <- Compare %>%
+  Daily_compare_raw <- Compare %>%
     mutate(Date = as.Date(DateTime)) %>%
     group_by(Site, Date) %>%
     summarise(
@@ -1160,8 +1166,26 @@ if (file.exists(moscow_file)) {
       GPP_sum = sum(GPP, na.rm = TRUE) * 12 * 1800 / 10^6,
       Reco_sum = sum(Reco, na.rm = TRUE) * 12 * 1800 / 10^6,
       .groups = "drop"
-    ) %>%
+    )
+
+  # Create complete day sequences for each site from sowing to harvest
+  complete_Moscow <- data.frame(
+    Site = "Moscow",
+    DoY = seq(sowing_Moscow, yday(B_Moscow$Harvesting))
+  )
+  complete_Kursk <- data.frame(
+    Site = "Kursk",
+    DoY = seq(sowing_Kursk, 226)
+  )
+  complete_both <- bind_rows(complete_Moscow, complete_Kursk)
+
+  # Merge with actual data, fill missing days with zeros
+  Daily_compare <- complete_both %>%
+    left_join(Daily_compare_raw, by = c("Site", "DoY")) %>%
     mutate(
+      NEE_sum = ifelse(is.na(NEE_sum), 0, NEE_sum),
+      GPP_sum = ifelse(is.na(GPP_sum), 0, GPP_sum),
+      Reco_sum = ifelse(is.na(Reco_sum), 0, Reco_sum),
       DAS = ifelse(Site == "Moscow", DoY - sowing_Moscow, DoY - sowing_Kursk)
     ) %>%
     group_by(Site) %>%
