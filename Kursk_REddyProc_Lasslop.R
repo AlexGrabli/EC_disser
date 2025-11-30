@@ -854,8 +854,8 @@ if (file.exists(moscow_file)) {
   # Parse time (ISO format: 2013-04-30T20:30:00Z)
   moscow_raw$datetime <- as.POSIXct(moscow_raw$datetime, format = "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
 
-  # Shift time by 3 hours (UTC to Moscow time)
-  moscow_raw$datetime <- moscow_raw$datetime + 3 * 3600
+  # NOTE: No time shift for Moscow data - timestamps already in correct local time
+  # (matching all_seasons_finalversion_1.R approach)
 
   # Moscow phenophase boundaries (2013)
   # Sowing: 2013-05-14 (DoY 134)
