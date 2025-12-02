@@ -1660,22 +1660,33 @@ add_days_from_sowing <- function(df, sowing_date) {
 }
 
 # Функция для расчета кумулятивных сумм потоков CO2
-# Пересчитывает µmol CO2 m-2 s-1 в g CO2 m-2 за период
+# Пересчитывает µmol CO2 m-2 s-1 в g C m-2 день-1
 # 1 µmol CO2 = 44 µg CO2, за 30 минут (1800 с)
+# Агрегирует данные по дням для гладких линий
 calculate_cumulative_fluxes <- function(df) {
   df %>%
     arrange(Date, HourInt) %>%
     mutate(
-      # Пересчет в g CO2 m-2 за 30 минут
+      # Пересчет в g C m-2 за 30 минут
       # µmol/m2/s * 44 (MW CO2) * 1800 s / 1e6 = g CO2/m2
-      GPP_gC = GPP * 44 * 1800 / 1e6 / 1000 * 12/44,  # g C m-2
+      GPP_gC = GPP * 44 * 1800 / 1e6 / 1000 * 12/44,  # g C m-2 за получасовой интервал
       Reco_gC = Reco * 44 * 1800 / 1e6 / 1000 * 12/44,
-      NEE_gC = NEE * 44 * 1800 / 1e6 / 1000 * 12/44,
-
-      # Кумулятивные суммы
-      GPP_cum = cumsum(ifelse(is.finite(GPP_gC), GPP_gC, 0)),
-      Reco_cum = cumsum(ifelse(is.finite(Reco_gC), Reco_gC, 0)),
-      NEE_cum = cumsum(ifelse(is.finite(NEE_gC), NEE_gC, 0))
+      NEE_gC = NEE * 44 * 1800 / 1e6 / 1000 * 12/44
+    ) %>%
+    # Агрегация по дням: суммируем все получасовые интервалы за день
+    group_by(Date, Days_from_sowing) %>%
+    summarise(
+      GPP_daily = sum(ifelse(is.finite(GPP_gC), GPP_gC, 0), na.rm = TRUE),  # g C m-2 день-1
+      Reco_daily = sum(ifelse(is.finite(Reco_gC), Reco_gC, 0), na.rm = TRUE),
+      NEE_daily = sum(ifelse(is.finite(NEE_gC), NEE_gC, 0), na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    # Кумулятивные суммы по дням
+    arrange(Days_from_sowing) %>%
+    mutate(
+      GPP_cum = cumsum(GPP_daily),
+      Reco_cum = cumsum(Reco_daily),
+      NEE_cum = cumsum(NEE_daily)
     )
 }
 
@@ -1758,15 +1769,15 @@ cumulative_summary <- df_all_cum %>%
     Start_date = min(Date, na.rm = TRUE),
     End_date = max(Date, na.rm = TRUE),
     Days = as.numeric(End_date - Start_date) + 1,
-    
+
     GPP_total_gC = max(GPP_cum, na.rm = TRUE),
     Reco_total_gC = max(Reco_cum, na.rm = TRUE),
     NEE_total_gC = max(NEE_cum, na.rm = TRUE),
-    
-    GPP_mean = mean(GPP, na.rm = TRUE),
-    Reco_mean = mean(Reco, na.rm = TRUE),
-    NEE_mean = mean(NEE, na.rm = TRUE),
-    
+
+    GPP_mean_daily = mean(GPP_daily, na.rm = TRUE),  # средний дневной поток g C m-2 день-1
+    Reco_mean_daily = mean(Reco_daily, na.rm = TRUE),
+    NEE_mean_daily = mean(NEE_daily, na.rm = TRUE),
+
     .groups = "drop"
   )
 
@@ -1837,10 +1848,10 @@ p_gpp_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = GPP_cum, color = Y
   geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
              linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
   geom_line(linewidth = 1.2) +
-  scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
+  scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
   labs(title = "Кумулятивный GPP по дням вегетационного периода",
        subtitle = "Вертикальные линии — начало фенофаз",
-       x = "Дни от сева", y = "Кумулятивный GPP (g C m⁻²)",
+       x = "Дни от сева", y = "Накопленная сумма GPP (g C m⁻² за период)",
        color = "Год") +
   theme_bw(base_size = 12) +
   theme(legend.position = "right",
@@ -1854,10 +1865,10 @@ p_reco_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = Reco_cum, color =
   geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
              linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
   geom_line(linewidth = 1.2) +
-  scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
+  scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
   labs(title = "Кумулятивный Reco по дням вегетационного периода",
        subtitle = "Вертикальные линии — начало фенофаз",
-       x = "Дни от сева", y = "Кумулятивный Reco (g C m⁻²)",
+       x = "Дни от сева", y = "Накопленная сумма Reco (g C m⁻² за период)",
        color = "Год") +
   theme_bw(base_size = 12) +
   theme(legend.position = "right",
@@ -1872,10 +1883,10 @@ p_nee_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = NEE_cum, color = Y
   geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
              linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
   geom_line(linewidth = 1.2) +
-  scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
+  scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
   labs(title = "Кумулятивный NEE по дням вегетационного периода",
        subtitle = "Отрицательные значения = поглощение CO₂. Вертикальные линии — начало фенофаз",
-       x = "Дни от сева", y = "Кумулятивный NEE (g C m⁻²)",
+       x = "Дни от сева", y = "Накопленная сумма NEE (g C m⁻² за период)",
        color = "Год") +
   theme_bw(base_size = 12) +
   theme(legend.position = "right",
@@ -1889,7 +1900,7 @@ p_gdd_cum <- ggplot(gdd_all, aes(x = Days_from_sowing, y = GDD_cum, color = Year
   geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
              linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
   geom_line(linewidth = 1.2) +
-  scale_color_manual(values = c("2013" = "#E41A1C", "2016" = "#377EB8", "2023" = "#4DAF4A")) +
+  scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
   labs(title = "Кумулятивная сумма активных температур >10°C",
        subtitle = "Вертикальные линии — начало фенофаз",
        x = "Дни от сева", y = "Сумма активных температур (°C·день)",
