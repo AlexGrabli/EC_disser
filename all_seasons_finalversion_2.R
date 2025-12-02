@@ -1668,10 +1668,10 @@ calculate_cumulative_fluxes <- function(df) {
     arrange(Date, HourInt) %>%
     mutate(
       # Пересчет в g C m-2 за 30 минут
-      # µmol/m2/s * 44 (MW CO2) * 1800 s / 1e6 = g CO2/m2
-      GPP_gC = GPP * 44 * 1800 / 1e6 / 1000 * 12/44,  # g C m-2 за получасовой интервал
-      Reco_gC = Reco * 44 * 1800 / 1e6 / 1000 * 12/44,
-      NEE_gC = NEE * 44 * 1800 / 1e6 / 1000 * 12/44
+      # µmol/m2/s * 1800 s * 12 (MW C) / 1e6 = g C/m2
+      GPP_gC = GPP * 1800 * 12 / 1e6,  # g C m-2 за получасовой интервал
+      Reco_gC = Reco * 1800 * 12 / 1e6,
+      NEE_gC = NEE * 1800 * 12 / 1e6
     ) %>%
     # Агрегация по дням: суммируем все получасовые интервалы за день
     group_by(Date, Days_from_sowing) %>%
@@ -1851,7 +1851,7 @@ p_gpp_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = GPP_cum, color = Y
   scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
   labs(title = "Кумулятивный GPP по дням вегетационного периода",
        subtitle = "Вертикальные линии — начало фенофаз",
-       x = "Дни от сева", y = "Накопленная сумма GPP (g C m⁻² за период)",
+       x = "Дни от сева", y = "Кумулятивный GPP (г C м⁻²)",
        color = "Год") +
   theme_bw(base_size = 12) +
   theme(legend.position = "right",
@@ -1868,7 +1868,7 @@ p_reco_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = Reco_cum, color =
   scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
   labs(title = "Кумулятивный Reco по дням вегетационного периода",
        subtitle = "Вертикальные линии — начало фенофаз",
-       x = "Дни от сева", y = "Накопленная сумма Reco (g C m⁻² за период)",
+       x = "Дни от сева", y = "Кумулятивный Reco (г C м⁻²)",
        color = "Год") +
   theme_bw(base_size = 12) +
   theme(legend.position = "right",
@@ -1886,7 +1886,7 @@ p_nee_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = NEE_cum, color = Y
   scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
   labs(title = "Кумулятивный NEE по дням вегетационного периода",
        subtitle = "Отрицательные значения = поглощение CO₂. Вертикальные линии — начало фенофаз",
-       x = "Дни от сева", y = "Накопленная сумма NEE (g C m⁻² за период)",
+       x = "Дни от сева", y = "Кумулятивный NEE (г C м⁻²)",
        color = "Год") +
   theme_bw(base_size = 12) +
   theme(legend.position = "right",
