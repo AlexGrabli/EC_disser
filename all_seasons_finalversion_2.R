@@ -1664,7 +1664,7 @@ add_days_from_sowing <- function(df, sowing_date) {
 # 1 µmol CO2 = 44 µg CO2, за 30 минут (1800 с)
 # Агрегирует данные по дням для гладких линий
 calculate_cumulative_fluxes <- function(df) {
-  df %>%
+  daily <- df %>%
     arrange(Date, HourInt) %>%
     mutate(
       # Пересчет в g C m-2 за 30 минут
@@ -1680,10 +1680,25 @@ calculate_cumulative_fluxes <- function(df) {
       Reco_daily = sum(ifelse(is.finite(Reco_gC), Reco_gC, 0), na.rm = TRUE),
       NEE_daily = sum(ifelse(is.finite(NEE_gC), NEE_gC, 0), na.rm = TRUE),
       .groups = "drop"
-    ) %>%
-    # Кумулятивные суммы по дням
+    )
+
+  # Дополняем недостающие дни (от 1 до максимального)
+  # Это важно для 2023 года, где может не быть данных в первые дни после сева
+  all_days <- tibble(Days_from_sowing = seq(1, max(daily$Days_from_sowing, na.rm = TRUE)))
+
+  daily %>%
+    right_join(all_days, by = "Days_from_sowing") %>%
     arrange(Days_from_sowing) %>%
     mutate(
+      # Заполняем пропущенные даты
+      Date = if_else(is.na(Date),
+                     min(daily$Date, na.rm = TRUE) + days(Days_from_sowing - 1),
+                     Date),
+      # Заполняем нулями потоки для дней без данных
+      GPP_daily = ifelse(is.na(GPP_daily), 0, GPP_daily),
+      Reco_daily = ifelse(is.na(Reco_daily), 0, Reco_daily),
+      NEE_daily = ifelse(is.na(NEE_daily), 0, NEE_daily),
+      # Кумулятивные суммы
       GPP_cum = cumsum(GPP_daily),
       Reco_cum = cumsum(Reco_daily),
       NEE_cum = cumsum(NEE_daily)
@@ -1692,7 +1707,7 @@ calculate_cumulative_fluxes <- function(df) {
 
 # Функция для расчета кумулятивных сумм активных температур
 calculate_gdd <- function(df, base_temp = 10) {
-  df %>%
+  daily_gdd <- df %>%
     arrange(Date, HourInt) %>%
     group_by(Date) %>%
     summarise(
@@ -1702,7 +1717,23 @@ calculate_gdd <- function(df, base_temp = 10) {
     ) %>%
     mutate(
       # Сумма активных температур (GDD - Growing Degree Days)
-      GDD_daily = pmax(0, Tair_mean - base_temp),
+      GDD_daily = pmax(0, Tair_mean - base_temp)
+    )
+
+  # Дополняем недостающие дни (от 1 до максимального)
+  all_days <- tibble(Days_from_sowing = seq(1, max(daily_gdd$Days_from_sowing, na.rm = TRUE)))
+
+  daily_gdd %>%
+    right_join(all_days, by = "Days_from_sowing") %>%
+    arrange(Days_from_sowing) %>%
+    mutate(
+      # Заполняем пропущенные даты
+      Date = if_else(is.na(Date),
+                     min(daily_gdd$Date, na.rm = TRUE) + days(Days_from_sowing - 1),
+                     Date),
+      # Заполняем нулями для дней без данных
+      GDD_daily = ifelse(is.na(GDD_daily), 0, GDD_daily),
+      # Кумулятивная сумма
       GDD_cum = cumsum(ifelse(is.finite(GDD_daily), GDD_daily, 0))
     )
 }
