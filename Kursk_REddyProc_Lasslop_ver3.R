@@ -29,8 +29,42 @@ PHASE_EN <- c("Emergence", "Tillering", "Stem elongation", "Heading", "Flowering
 # 1. DATA LOADING AND PREPARATION
 # =============================================================================
 
-# Load raw data from EddyPro output
-kursk_data <- fread("Kursk_data_half_our.csv")
+# Load raw flux data from EddyPro output (Kursk 2013)
+eddy_data <- fread("eddypro_2013.csv", skip = 1)  # Skip units row
+
+# Load meteorological data from biomet logger (Kursk 2013)
+biomet_data <- fread("biomet2013.csv", sep = ";", skip = 1)  # Skip units row
+
+# Parse timestamps for eddy data
+eddy_data$DateTime <- as.POSIXct(paste(eddy_data$date, eddy_data$time),
+                                  format = "%Y-%m-%d %H:%M", tz = "UTC")
+
+# Parse timestamps for biomet data
+biomet_data$DateTime <- as.POSIXct(paste(biomet_data$DATE_1, biomet_data$TIME_1),
+                                    format = "%Y-%m-%d %H:%M", tz = "UTC")
+
+# Shift times by 3 hours (UTC to Moscow time)
+eddy_data$DateTime <- eddy_data$DateTime + 3 * 3600
+biomet_data$DateTime <- biomet_data$DateTime + 3 * 3600
+
+# Merge eddy and biomet data by DateTime
+kursk_data <- eddy_data %>%
+  left_join(biomet_data %>%
+              select(DateTime, Ta_Avg = AirTC_Avg, RH_Avg = RH,
+                     VP_kPa, SVP_kPa,
+                     Tsoil_1 = TSoil_1_Avg, Tsoil_2 = TSoil_2_Avg,
+                     Tsoil_3 = TSoil_3_Avg, Tsoil_4 = TSoil_4_Avg,
+                     SWC_1 = VWC_1_Avg, SWC_2 = VWC_2_Avg,
+                     SWC_3 = VWC_3_Avg, SWC_4 = VWC_4_Avg),
+            by = "DateTime") %>%
+  mutate(
+    # Calculate VPD from vapor pressure (SVP - VP) in kPa
+    VPD_calc = pmax(0, SVP_kPa - VP_kPa),
+    # Average soil temperature (exclude NA values)
+    Tsoil_avg = rowMeans(select(., starts_with("Tsoil_")), na.rm = TRUE),
+    # Average soil water content (top layers, exclude NA)
+    SWC_avg = rowMeans(select(., starts_with("SWC_")), na.rm = TRUE)
+  )
 
 # Load phenophase data from xlsx
 # Try to read Phase column from xlsx file
@@ -71,12 +105,6 @@ Lat_deg <- 51.14567
 Long_deg <- 36.50624
 TimeZone_h <- 3  # Moscow time zone (UTC+3)
 
-# Parse DateTime
-kursk_data$DateTime <- as.POSIXct(kursk_data$DateTime, format = "%Y-%m-%d %H:%M:%S")
-
-# Shift time by 3 hours (UTC to Moscow time)
-kursk_data$DateTime <- kursk_data$DateTime + 3 * 3600
-
 # Create REddyProc-compatible columns
 # REddyProc expects specific column names including DateTime
 EddyData <- kursk_data %>%
@@ -85,24 +113,24 @@ EddyData <- kursk_data %>%
     Year = year(DateTime),
     DoY = yday(DateTime),
     Hour = hour(DateTime) + minute(DateTime)/60,
-    # NEE in umol m-2 s-1 (already in this format from EddyPro)
-    NEE = as.numeric(NEE),
+    # NEE in umol m-2 s-1 (co2_flux from EddyPro)
+    NEE = as.numeric(co2_flux),
     # Latent heat flux in W m-2
     LE = as.numeric(LE),
     # Sensible heat flux in W m-2
     H = as.numeric(H),
-    # Friction velocity in m s-1
-    Ustar = as.numeric(Ustar),
-    # Air temperature in deg C
-    Tair = as.numeric(Tair),
-    # Global radiation in W m-2
-    Rg = as.numeric(Rg),
-    # Vapor Pressure Deficit in hPa
-    VPD = as.numeric(VPD) * 10,  # Convert from kPa to hPa if needed
-    # Relative humidity in %
-    rH = as.numeric(rH),
-    # Soil temperature in deg C
-    Tsoil = as.numeric(Tsoil)
+    # Friction velocity in m s-1 (calculated from Tau)
+    Ustar = as.numeric(sqrt(abs(Tau))),
+    # Air temperature in deg C (from biomet)
+    Tair = as.numeric(Ta_Avg),
+    # Global radiation in W m-2 (from biomet - shortwave down)
+    Rg = as.numeric(SR01Dn_Avg),
+    # Vapor Pressure Deficit in hPa (convert from kPa)
+    VPD = as.numeric(VPD_calc) * 10,
+    # Relative humidity in % (from biomet)
+    rH = as.numeric(RH_Avg),
+    # Soil temperature in deg C (averaged across depths)
+    Tsoil = as.numeric(Tsoil_avg)
   ) %>%
   select(DateTime, Year, DoY, Hour, NEE, LE, H, Ustar, Tair, Rg, VPD, rH, Tsoil) %>%
   as.data.frame()
@@ -205,6 +233,28 @@ Results <- EProc$sExportResults()
 
 # Add DateTime back
 Results$DateTime <- kursk_data$DateTime[1:nrow(Results)]
+
+# Add original meteorological data (before gap-filling) from biomet
+# Temperature and humidity
+Results$Ta_orig <- kursk_data$Ta_Avg[1:nrow(Results)]
+Results$RH_orig <- kursk_data$RH_Avg[1:nrow(Results)]
+Results$VPD_orig_kPa <- kursk_data$VPD_calc[1:nrow(Results)]
+Results$VPD_orig_hPa <- kursk_data$VPD_calc[1:nrow(Results)] * 10
+
+# Soil data - individual depths
+Results$Tsoil_1 <- kursk_data$Tsoil_1[1:nrow(Results)]
+Results$Tsoil_2 <- kursk_data$Tsoil_2[1:nrow(Results)]
+Results$Tsoil_3 <- kursk_data$Tsoil_3[1:nrow(Results)]
+Results$Tsoil_4 <- kursk_data$Tsoil_4[1:nrow(Results)]
+
+Results$SWC_1 <- kursk_data$SWC_1[1:nrow(Results)]
+Results$SWC_2 <- kursk_data$SWC_2[1:nrow(Results)]
+Results$SWC_3 <- kursk_data$SWC_3[1:nrow(Results)]
+Results$SWC_4 <- kursk_data$SWC_4[1:nrow(Results)]
+
+# Soil data - averages
+Results$Tsoil_avg <- kursk_data$Tsoil_avg[1:nrow(Results)]
+Results$SWC_avg <- kursk_data$SWC_avg[1:nrow(Results)]
 
 # Add Tsoil and Hour from original data (not included in REddyProc output)
 Results$Tsoil <- EddyData$Tsoil[1:nrow(Results)]
