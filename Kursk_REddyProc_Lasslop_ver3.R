@@ -1236,115 +1236,215 @@ if (file.exists(moscow_file)) {
     DAS = c(118, 136, 157, 165, 180, 196) - sowing_Kursk
   )
 
-  # Use average phenophase timing for comparison plots
-  phase_DAS_avg <- data.frame(
-    Phase_ru = PHASE_RU,
-    Phase_en = PHASE_EN,
-    DAS = (phase_DAS_Moscow$DAS + phase_DAS_Kursk$DAS) / 2
-  )
+  # Prepare phenophase lines for both sites (with Site identifier for coloring)
+  phase_DAS_Moscow_plot <- phase_DAS_Moscow %>%
+    mutate(Site = "Moscow")
+  phase_DAS_Kursk_plot <- phase_DAS_Kursk %>%
+    mutate(Site = "Kursk")
+  phase_DAS_both <- bind_rows(phase_DAS_Moscow_plot, phase_DAS_Kursk_plot)
+
+  # Color palette for phenophase lines matching site colors
+  pal_phase_line <- c("Moscow" = "#1b9e77", "Kursk" = "#d95f02")
+  pal_phase_alpha <- c("Moscow" = 0.4, "Kursk" = 0.4)
 
   # Russian version of cumulative plots
   plot_compare_cum_NEE_ru <- ggplot(Daily_compare_veg, aes(x = DAS, y = NEE_cum, color = Site)) +
-    geom_line(linewidth = 1) +
-    geom_hline(yintercept = 0, linetype = 2) +
-    geom_vline(data = phase_DAS_avg, aes(xintercept = DAS),
-               linetype = "dotted", color = "gray40", linewidth = 0.5) +
-    geom_text(data = phase_DAS_avg,
-              aes(x = DAS + 1, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.9,
+    geom_line(linewidth = 1.2) +
+    geom_hline(yintercept = 0, linetype = 2, color = "gray50") +
+    # Phenophase lines for Moscow (solid)
+    geom_vline(data = phase_DAS_Moscow_plot, aes(xintercept = DAS),
+               linetype = "solid", color = pal_phase_line["Moscow"],
+               linewidth = 0.6, alpha = 0.5) +
+    # Phenophase lines for Kursk (dashed)
+    geom_vline(data = phase_DAS_Kursk_plot, aes(xintercept = DAS),
+               linetype = "dashed", color = pal_phase_line["Kursk"],
+               linewidth = 0.6, alpha = 0.5) +
+    # Labels for Moscow (top half)
+    geom_text(data = phase_DAS_Moscow_plot,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.95,
                   label = Phase_ru),
-              angle = 90, hjust = 1, vjust = 0, size = 2.5, color = "gray30") +
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.3,
+              color = pal_phase_line["Moscow"], fontface = "plain") +
+    # Labels for Kursk (bottom half)
+    geom_text(data = phase_DAS_Kursk_plot,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.95,
+                  label = Phase_ru),
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.3,
+              color = pal_phase_line["Kursk"], fontface = "plain") +
     scale_color_manual(values = pal_site, labels = c("Курск", "Москва")) +
     labs(
       title = "Кумулятивный NEE: Москва vs Курск",
+      subtitle = "Вертикальные линии: сплошные (Москва), пунктир (Курск)",
       x = "Дни от посева",
       y = expression("Кумулятивный NEE (g C"~m^{-2}*")"),
       color = "Участок"
     ) +
-    theme_flux
+    theme_flux +
+    theme(plot.subtitle = element_text(size = 9, color = "gray40"))
 
   plot_compare_cum_GPP_ru <- ggplot(Daily_compare_veg, aes(x = DAS, y = GPP_cum, color = Site)) +
-    geom_line(linewidth = 1) +
-    geom_vline(data = phase_DAS_avg, aes(xintercept = DAS),
-               linetype = "dotted", color = "gray40", linewidth = 0.5) +
-    geom_text(data = phase_DAS_avg,
-              aes(x = DAS + 1, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.9,
+    geom_line(linewidth = 1.2) +
+    # Phenophase lines for Moscow (solid)
+    geom_vline(data = phase_DAS_Moscow_plot, aes(xintercept = DAS),
+               linetype = "solid", color = pal_phase_line["Moscow"],
+               linewidth = 0.6, alpha = 0.5) +
+    # Phenophase lines for Kursk (dashed)
+    geom_vline(data = phase_DAS_Kursk_plot, aes(xintercept = DAS),
+               linetype = "dashed", color = pal_phase_line["Kursk"],
+               linewidth = 0.6, alpha = 0.5) +
+    # Labels for Moscow (top)
+    geom_text(data = phase_DAS_Moscow_plot,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.95,
                   label = Phase_ru),
-              angle = 90, hjust = 1, vjust = 0, size = 2.5, color = "gray30") +
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.3,
+              color = pal_phase_line["Moscow"], fontface = "plain") +
+    # Labels for Kursk (bottom)
+    geom_text(data = phase_DAS_Kursk_plot,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.95,
+                  label = Phase_ru),
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.3,
+              color = pal_phase_line["Kursk"], fontface = "plain") +
     scale_color_manual(values = pal_site, labels = c("Курск", "Москва")) +
     labs(
       title = "Кумулятивный GPP: Москва vs Курск",
+      subtitle = "Вертикальные линии: сплошные (Москва), пунктир (Курск)",
       x = "Дни от посева",
       y = expression("Кумулятивный GPP (g C"~m^{-2}*")"),
       color = "Участок"
     ) +
-    theme_flux
+    theme_flux +
+    theme(plot.subtitle = element_text(size = 9, color = "gray40"))
 
   plot_compare_cum_Reco_ru <- ggplot(Daily_compare_veg, aes(x = DAS, y = Reco_cum, color = Site)) +
-    geom_line(linewidth = 1) +
-    geom_vline(data = phase_DAS_avg, aes(xintercept = DAS),
-               linetype = "dotted", color = "gray40", linewidth = 0.5) +
-    geom_text(data = phase_DAS_avg,
-              aes(x = DAS + 1, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.9,
+    geom_line(linewidth = 1.2) +
+    # Phenophase lines for Moscow (solid)
+    geom_vline(data = phase_DAS_Moscow_plot, aes(xintercept = DAS),
+               linetype = "solid", color = pal_phase_line["Moscow"],
+               linewidth = 0.6, alpha = 0.5) +
+    # Phenophase lines for Kursk (dashed)
+    geom_vline(data = phase_DAS_Kursk_plot, aes(xintercept = DAS),
+               linetype = "dashed", color = pal_phase_line["Kursk"],
+               linewidth = 0.6, alpha = 0.5) +
+    # Labels for Moscow (top)
+    geom_text(data = phase_DAS_Moscow_plot,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.95,
                   label = Phase_ru),
-              angle = 90, hjust = 1, vjust = 0, size = 2.5, color = "gray30") +
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.3,
+              color = pal_phase_line["Moscow"], fontface = "plain") +
+    # Labels for Kursk (bottom)
+    geom_text(data = phase_DAS_Kursk_plot,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.95,
+                  label = Phase_ru),
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.3,
+              color = pal_phase_line["Kursk"], fontface = "plain") +
     scale_color_manual(values = pal_site, labels = c("Курск", "Москва")) +
     labs(
       title = "Кумулятивный Reco: Москва vs Курск",
+      subtitle = "Вертикальные линии: сплошные (Москва), пунктир (Курск)",
       x = "Дни от посева",
       y = expression("Кумулятивный Reco (g C"~m^{-2}*")"),
       color = "Участок"
     ) +
-    theme_flux
+    theme_flux +
+    theme(plot.subtitle = element_text(size = 9, color = "gray40"))
 
   # English version of cumulative plots
   plot_compare_cum_NEE_en <- ggplot(Daily_compare_veg, aes(x = DAS, y = NEE_cum, color = Site)) +
-    geom_line(linewidth = 1) +
-    geom_hline(yintercept = 0, linetype = 2) +
-    geom_vline(data = phase_DAS_avg, aes(xintercept = DAS),
-               linetype = "dotted", color = "gray40", linewidth = 0.5) +
-    geom_text(data = phase_DAS_avg,
-              aes(x = DAS + 1, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.9,
+    geom_line(linewidth = 1.2) +
+    geom_hline(yintercept = 0, linetype = 2, color = "gray50") +
+    # Phenophase lines for Moscow (solid)
+    geom_vline(data = phase_DAS_Moscow_plot, aes(xintercept = DAS),
+               linetype = "solid", color = pal_phase_line["Moscow"],
+               linewidth = 0.6, alpha = 0.5) +
+    # Phenophase lines for Kursk (dashed)
+    geom_vline(data = phase_DAS_Kursk_plot, aes(xintercept = DAS),
+               linetype = "dashed", color = pal_phase_line["Kursk"],
+               linewidth = 0.6, alpha = 0.5) +
+    # Labels for Moscow (top)
+    geom_text(data = phase_DAS_Moscow_plot,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.95,
                   label = Phase_en),
-              angle = 90, hjust = 1, vjust = 0, size = 2.5, color = "gray30") +
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.3,
+              color = pal_phase_line["Moscow"], fontface = "plain") +
+    # Labels for Kursk (bottom)
+    geom_text(data = phase_DAS_Kursk_plot,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.95,
+                  label = Phase_en),
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.3,
+              color = pal_phase_line["Kursk"], fontface = "plain") +
     scale_color_manual(values = pal_site) +
     labs(
       title = "Cumulative NEE: Moscow vs Kursk",
+      subtitle = "Vertical lines: solid (Moscow), dashed (Kursk)",
       x = "Days after sowing",
       y = expression("Cumulative NEE (g C"~m^{-2}*")")
     ) +
-    theme_flux
+    theme_flux +
+    theme(plot.subtitle = element_text(size = 9, color = "gray40"))
 
   plot_compare_cum_GPP_en <- ggplot(Daily_compare_veg, aes(x = DAS, y = GPP_cum, color = Site)) +
-    geom_line(linewidth = 1) +
-    geom_vline(data = phase_DAS_avg, aes(xintercept = DAS),
-               linetype = "dotted", color = "gray40", linewidth = 0.5) +
-    geom_text(data = phase_DAS_avg,
-              aes(x = DAS + 1, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.9,
+    geom_line(linewidth = 1.2) +
+    # Phenophase lines for Moscow (solid)
+    geom_vline(data = phase_DAS_Moscow_plot, aes(xintercept = DAS),
+               linetype = "solid", color = pal_phase_line["Moscow"],
+               linewidth = 0.6, alpha = 0.5) +
+    # Phenophase lines for Kursk (dashed)
+    geom_vline(data = phase_DAS_Kursk_plot, aes(xintercept = DAS),
+               linetype = "dashed", color = pal_phase_line["Kursk"],
+               linewidth = 0.6, alpha = 0.5) +
+    # Labels for Moscow (top)
+    geom_text(data = phase_DAS_Moscow_plot,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.95,
                   label = Phase_en),
-              angle = 90, hjust = 1, vjust = 0, size = 2.5, color = "gray30") +
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.3,
+              color = pal_phase_line["Moscow"], fontface = "plain") +
+    # Labels for Kursk (bottom)
+    geom_text(data = phase_DAS_Kursk_plot,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.95,
+                  label = Phase_en),
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.3,
+              color = pal_phase_line["Kursk"], fontface = "plain") +
     scale_color_manual(values = pal_site) +
     labs(
       title = "Cumulative GPP: Moscow vs Kursk",
+      subtitle = "Vertical lines: solid (Moscow), dashed (Kursk)",
       x = "Days after sowing",
       y = expression("Cumulative GPP (g C"~m^{-2}*")")
     ) +
-    theme_flux
+    theme_flux +
+    theme(plot.subtitle = element_text(size = 9, color = "gray40"))
 
   plot_compare_cum_Reco_en <- ggplot(Daily_compare_veg, aes(x = DAS, y = Reco_cum, color = Site)) +
-    geom_line(linewidth = 1) +
-    geom_vline(data = phase_DAS_avg, aes(xintercept = DAS),
-               linetype = "dotted", color = "gray40", linewidth = 0.5) +
-    geom_text(data = phase_DAS_avg,
-              aes(x = DAS + 1, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.9,
+    geom_line(linewidth = 1.2) +
+    # Phenophase lines for Moscow (solid)
+    geom_vline(data = phase_DAS_Moscow_plot, aes(xintercept = DAS),
+               linetype = "solid", color = pal_phase_line["Moscow"],
+               linewidth = 0.6, alpha = 0.5) +
+    # Phenophase lines for Kursk (dashed)
+    geom_vline(data = phase_DAS_Kursk_plot, aes(xintercept = DAS),
+               linetype = "dashed", color = pal_phase_line["Kursk"],
+               linewidth = 0.6, alpha = 0.5) +
+    # Labels for Moscow (top)
+    geom_text(data = phase_DAS_Moscow_plot,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.95,
                   label = Phase_en),
-              angle = 90, hjust = 1, vjust = 0, size = 2.5, color = "gray30") +
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.3,
+              color = pal_phase_line["Moscow"], fontface = "plain") +
+    # Labels for Kursk (bottom)
+    geom_text(data = phase_DAS_Kursk_plot,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.95,
+                  label = Phase_en),
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.3,
+              color = pal_phase_line["Kursk"], fontface = "plain") +
     scale_color_manual(values = pal_site) +
     labs(
       title = "Cumulative Reco: Moscow vs Kursk",
+      subtitle = "Vertical lines: solid (Moscow), dashed (Kursk)",
       x = "Days after sowing",
       y = expression("Cumulative Reco (g C"~m^{-2}*")")
     ) +
-    theme_flux
+    theme_flux +
+    theme(plot.subtitle = element_text(size = 9, color = "gray40"))
 
   # Print all comparison plots
   print(plot_compare_diurnal_NEE)
