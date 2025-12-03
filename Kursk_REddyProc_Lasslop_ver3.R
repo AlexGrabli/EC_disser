@@ -880,7 +880,18 @@ if (file.exists(moscow_file)) {
     Emergence = as.Date("2013-05-17"), Tillering = as.Date("2013-06-03"),
     StemElong = as.Date("2013-06-27"), Heading = as.Date("2013-07-17"),
     Flowering = as.Date("2013-07-28"), Ripening = as.Date("2013-08-03"),
-    Harvesting = as.Date("2013-08-14")
+    HarvestStart = as.Date("2013-08-14"),  # DoY 226, DAS 93
+    HarvestEnd = as.Date("2013-09-09")     # DoY 252, DAS 119
+  )
+
+  # Kursk harvest dates (2013)
+  # Sowing: DoY 115
+  # Harvest start: DoY 226, DAS 112
+  # Harvest end: DoY 244, DAS 130
+  Harvest_Kursk <- list(
+    Sowing_DoY = 115,
+    HarvestStart_DoY = 226,   # DAS 112
+    HarvestEnd_DoY = 244       # DAS 130
   )
 
   # Assign phases for Moscow
@@ -892,7 +903,7 @@ if (file.exists(moscow_file)) {
     res[d >= B_Moscow$StemElong & d < B_Moscow$Heading] <- "Выход в трубку"  # Jun 27 - Jul 16
     res[d >= B_Moscow$Heading & d < B_Moscow$Flowering] <- "Колошение"       # Jul 17 - Jul 27
     res[d >= B_Moscow$Flowering & d < B_Moscow$Ripening] <- "Цветение"       # Jul 28 - Aug 2
-    res[d >= B_Moscow$Ripening & d <= B_Moscow$Harvesting] <- "Созревание"   # Aug 3 - Aug 14
+    res[d >= B_Moscow$Ripening & d <= B_Moscow$HarvestEnd] <- "Созревание"   # Aug 3 - Sep 9
     factor(res, levels = PHASE_RU)
   }
 
@@ -1214,9 +1225,10 @@ if (file.exists(moscow_file)) {
     ) %>%
     ungroup()
 
-  # Filter to vegetation period (days from sowing)
+  # Filter to vegetation period (days from sowing to end of harvest)
+  # Extended to 135 DAS to cover both sites' harvest end
   Daily_compare_veg <- Daily_compare %>%
-    filter(DAS >= 0 & DAS <= 120)
+    filter(DAS >= 0 & DAS <= 135)
 
   # Phenophase boundaries in days after sowing
   phase_DAS_Moscow <- data.frame(
@@ -1236,6 +1248,25 @@ if (file.exists(moscow_file)) {
     DAS = c(118, 136, 157, 165, 180, 196) - sowing_Kursk
   )
 
+  # Harvest period boundaries (in days after sowing)
+  harvest_Moscow <- data.frame(
+    Event = c("Начало уборки", "Окончание уборки"),
+    Event_en = c("Harvest start", "Harvest end"),
+    DAS = c(yday(B_Moscow$HarvestStart) - sowing_Moscow,    # DAS 93
+            yday(B_Moscow$HarvestEnd) - sowing_Moscow),     # DAS 119
+    Site = "Moscow"
+  )
+
+  harvest_Kursk <- data.frame(
+    Event = c("Начало уборки", "Окончание уборки"),
+    Event_en = c("Harvest start", "Harvest end"),
+    DAS = c(Harvest_Kursk$HarvestStart_DoY - sowing_Kursk,  # DAS 112
+            Harvest_Kursk$HarvestEnd_DoY - sowing_Kursk),   # DAS 130
+    Site = "Kursk"
+  )
+
+  harvest_both <- bind_rows(harvest_Moscow, harvest_Kursk)
+
   # Prepare phenophase lines for both sites (with Site identifier for coloring)
   phase_DAS_Moscow_plot <- phase_DAS_Moscow %>%
     mutate(Site = "Moscow")
@@ -1246,205 +1277,327 @@ if (file.exists(moscow_file)) {
   # Color palette for phenophase lines matching site colors
   pal_phase_line <- c("Moscow" = "#1b9e77", "Kursk" = "#d95f02")
   pal_phase_alpha <- c("Moscow" = 0.4, "Kursk" = 0.4)
+  # Harvest line styles (thicker and more prominent)
+  pal_harvest_line <- c("Moscow" = "#1b9e77", "Kursk" = "#d95f02")
 
   # Russian version of cumulative plots
   plot_compare_cum_NEE_ru <- ggplot(Daily_compare_veg, aes(x = DAS, y = NEE_cum, color = Site)) +
     geom_line(linewidth = 1.2) +
     geom_hline(yintercept = 0, linetype = 2, color = "gray50") +
-    # Phenophase lines for Moscow (solid)
+    # Phenophase lines for Moscow (solid, thin)
     geom_vline(data = phase_DAS_Moscow_plot, aes(xintercept = DAS),
                linetype = "solid", color = pal_phase_line["Moscow"],
-               linewidth = 0.6, alpha = 0.5) +
-    # Phenophase lines for Kursk (dashed)
+               linewidth = 0.5, alpha = 0.4) +
+    # Phenophase lines for Kursk (dashed, thin)
     geom_vline(data = phase_DAS_Kursk_plot, aes(xintercept = DAS),
                linetype = "dashed", color = pal_phase_line["Kursk"],
-               linewidth = 0.6, alpha = 0.5) +
-    # Labels for Moscow (top half)
+               linewidth = 0.5, alpha = 0.4) +
+    # Harvest lines for Moscow (solid, thick)
+    geom_vline(data = harvest_Moscow, aes(xintercept = DAS),
+               linetype = "solid", color = pal_harvest_line["Moscow"],
+               linewidth = 1.1, alpha = 0.7) +
+    # Harvest lines for Kursk (dashed, thick)
+    geom_vline(data = harvest_Kursk, aes(xintercept = DAS),
+               linetype = "dashed", color = pal_harvest_line["Kursk"],
+               linewidth = 1.1, alpha = 0.7) +
+    # Phenophase labels for Moscow (top)
     geom_text(data = phase_DAS_Moscow_plot,
               aes(x = DAS + 0.5, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.95,
                   label = Phase_ru),
-              angle = 90, hjust = 1, vjust = -0.2, size = 2.3,
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.2,
               color = pal_phase_line["Moscow"], fontface = "plain") +
-    # Labels for Kursk (bottom half)
+    # Phenophase labels for Kursk (bottom)
     geom_text(data = phase_DAS_Kursk_plot,
               aes(x = DAS + 0.5, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.95,
                   label = Phase_ru),
-              angle = 90, hjust = 1, vjust = 1.3, size = 2.3,
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.2,
               color = pal_phase_line["Kursk"], fontface = "plain") +
+    # Harvest labels for Moscow (middle-top)
+    geom_text(data = harvest_Moscow,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.75,
+                  label = Event),
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.5,
+              color = pal_harvest_line["Moscow"], fontface = "bold") +
+    # Harvest labels for Kursk (middle-bottom)
+    geom_text(data = harvest_Kursk,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.75,
+                  label = Event),
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.5,
+              color = pal_harvest_line["Kursk"], fontface = "bold") +
     scale_color_manual(values = pal_site, labels = c("Курск", "Москва")) +
     labs(
       title = "Кумулятивный NEE: Москва vs Курск",
-      subtitle = "Вертикальные линии: сплошные (Москва), пунктир (Курск)",
+      subtitle = "Тонкие линии - фенофазы, жирные линии - период уборки. Сплошные (Москва), пунктир (Курск)",
       x = "Дни от посева",
       y = expression("Кумулятивный NEE (g C"~m^{-2}*")"),
       color = "Участок"
     ) +
     theme_flux +
-    theme(plot.subtitle = element_text(size = 9, color = "gray40"))
+    theme(plot.subtitle = element_text(size = 8.5, color = "gray40"))
 
   plot_compare_cum_GPP_ru <- ggplot(Daily_compare_veg, aes(x = DAS, y = GPP_cum, color = Site)) +
     geom_line(linewidth = 1.2) +
-    # Phenophase lines for Moscow (solid)
+    # Phenophase lines for Moscow (solid, thin)
     geom_vline(data = phase_DAS_Moscow_plot, aes(xintercept = DAS),
                linetype = "solid", color = pal_phase_line["Moscow"],
-               linewidth = 0.6, alpha = 0.5) +
-    # Phenophase lines for Kursk (dashed)
+               linewidth = 0.5, alpha = 0.4) +
+    # Phenophase lines for Kursk (dashed, thin)
     geom_vline(data = phase_DAS_Kursk_plot, aes(xintercept = DAS),
                linetype = "dashed", color = pal_phase_line["Kursk"],
-               linewidth = 0.6, alpha = 0.5) +
-    # Labels for Moscow (top)
+               linewidth = 0.5, alpha = 0.4) +
+    # Harvest lines for Moscow (solid, thick)
+    geom_vline(data = harvest_Moscow, aes(xintercept = DAS),
+               linetype = "solid", color = pal_harvest_line["Moscow"],
+               linewidth = 1.1, alpha = 0.7) +
+    # Harvest lines for Kursk (dashed, thick)
+    geom_vline(data = harvest_Kursk, aes(xintercept = DAS),
+               linetype = "dashed", color = pal_harvest_line["Kursk"],
+               linewidth = 1.1, alpha = 0.7) +
+    # Phenophase labels for Moscow (top)
     geom_text(data = phase_DAS_Moscow_plot,
               aes(x = DAS + 0.5, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.95,
                   label = Phase_ru),
-              angle = 90, hjust = 1, vjust = -0.2, size = 2.3,
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.2,
               color = pal_phase_line["Moscow"], fontface = "plain") +
-    # Labels for Kursk (bottom)
+    # Phenophase labels for Kursk (bottom)
     geom_text(data = phase_DAS_Kursk_plot,
               aes(x = DAS + 0.5, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.95,
                   label = Phase_ru),
-              angle = 90, hjust = 1, vjust = 1.3, size = 2.3,
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.2,
               color = pal_phase_line["Kursk"], fontface = "plain") +
+    # Harvest labels for Moscow (middle-top)
+    geom_text(data = harvest_Moscow,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.75,
+                  label = Event),
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.5,
+              color = pal_harvest_line["Moscow"], fontface = "bold") +
+    # Harvest labels for Kursk (middle-bottom)
+    geom_text(data = harvest_Kursk,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.75,
+                  label = Event),
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.5,
+              color = pal_harvest_line["Kursk"], fontface = "bold") +
     scale_color_manual(values = pal_site, labels = c("Курск", "Москва")) +
     labs(
       title = "Кумулятивный GPP: Москва vs Курск",
-      subtitle = "Вертикальные линии: сплошные (Москва), пунктир (Курск)",
+      subtitle = "Тонкие линии - фенофазы, жирные линии - период уборки. Сплошные (Москва), пунктир (Курск)",
       x = "Дни от посева",
       y = expression("Кумулятивный GPP (g C"~m^{-2}*")"),
       color = "Участок"
     ) +
     theme_flux +
-    theme(plot.subtitle = element_text(size = 9, color = "gray40"))
+    theme(plot.subtitle = element_text(size = 8.5, color = "gray40"))
 
   plot_compare_cum_Reco_ru <- ggplot(Daily_compare_veg, aes(x = DAS, y = Reco_cum, color = Site)) +
     geom_line(linewidth = 1.2) +
-    # Phenophase lines for Moscow (solid)
+    # Phenophase lines for Moscow (solid, thin)
     geom_vline(data = phase_DAS_Moscow_plot, aes(xintercept = DAS),
                linetype = "solid", color = pal_phase_line["Moscow"],
-               linewidth = 0.6, alpha = 0.5) +
-    # Phenophase lines for Kursk (dashed)
+               linewidth = 0.5, alpha = 0.4) +
+    # Phenophase lines for Kursk (dashed, thin)
     geom_vline(data = phase_DAS_Kursk_plot, aes(xintercept = DAS),
                linetype = "dashed", color = pal_phase_line["Kursk"],
-               linewidth = 0.6, alpha = 0.5) +
-    # Labels for Moscow (top)
+               linewidth = 0.5, alpha = 0.4) +
+    # Harvest lines for Moscow (solid, thick)
+    geom_vline(data = harvest_Moscow, aes(xintercept = DAS),
+               linetype = "solid", color = pal_harvest_line["Moscow"],
+               linewidth = 1.1, alpha = 0.7) +
+    # Harvest lines for Kursk (dashed, thick)
+    geom_vline(data = harvest_Kursk, aes(xintercept = DAS),
+               linetype = "dashed", color = pal_harvest_line["Kursk"],
+               linewidth = 1.1, alpha = 0.7) +
+    # Phenophase labels for Moscow (top)
     geom_text(data = phase_DAS_Moscow_plot,
               aes(x = DAS + 0.5, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.95,
                   label = Phase_ru),
-              angle = 90, hjust = 1, vjust = -0.2, size = 2.3,
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.2,
               color = pal_phase_line["Moscow"], fontface = "plain") +
-    # Labels for Kursk (bottom)
+    # Phenophase labels for Kursk (bottom)
     geom_text(data = phase_DAS_Kursk_plot,
               aes(x = DAS + 0.5, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.95,
                   label = Phase_ru),
-              angle = 90, hjust = 1, vjust = 1.3, size = 2.3,
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.2,
               color = pal_phase_line["Kursk"], fontface = "plain") +
+    # Harvest labels for Moscow (middle-top)
+    geom_text(data = harvest_Moscow,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.75,
+                  label = Event),
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.5,
+              color = pal_harvest_line["Moscow"], fontface = "bold") +
+    # Harvest labels for Kursk (middle-bottom)
+    geom_text(data = harvest_Kursk,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.75,
+                  label = Event),
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.5,
+              color = pal_harvest_line["Kursk"], fontface = "bold") +
     scale_color_manual(values = pal_site, labels = c("Курск", "Москва")) +
     labs(
       title = "Кумулятивный Reco: Москва vs Курск",
-      subtitle = "Вертикальные линии: сплошные (Москва), пунктир (Курск)",
+      subtitle = "Тонкие линии - фенофазы, жирные линии - период уборки. Сплошные (Москва), пунктир (Курск)",
       x = "Дни от посева",
       y = expression("Кумулятивный Reco (g C"~m^{-2}*")"),
       color = "Участок"
     ) +
     theme_flux +
-    theme(plot.subtitle = element_text(size = 9, color = "gray40"))
+    theme(plot.subtitle = element_text(size = 8.5, color = "gray40"))
 
   # English version of cumulative plots
   plot_compare_cum_NEE_en <- ggplot(Daily_compare_veg, aes(x = DAS, y = NEE_cum, color = Site)) +
     geom_line(linewidth = 1.2) +
     geom_hline(yintercept = 0, linetype = 2, color = "gray50") +
-    # Phenophase lines for Moscow (solid)
+    # Phenophase lines for Moscow (solid, thin)
     geom_vline(data = phase_DAS_Moscow_plot, aes(xintercept = DAS),
                linetype = "solid", color = pal_phase_line["Moscow"],
-               linewidth = 0.6, alpha = 0.5) +
-    # Phenophase lines for Kursk (dashed)
+               linewidth = 0.5, alpha = 0.4) +
+    # Phenophase lines for Kursk (dashed, thin)
     geom_vline(data = phase_DAS_Kursk_plot, aes(xintercept = DAS),
                linetype = "dashed", color = pal_phase_line["Kursk"],
-               linewidth = 0.6, alpha = 0.5) +
-    # Labels for Moscow (top)
+               linewidth = 0.5, alpha = 0.4) +
+    # Harvest lines for Moscow (solid, thick)
+    geom_vline(data = harvest_Moscow, aes(xintercept = DAS),
+               linetype = "solid", color = pal_harvest_line["Moscow"],
+               linewidth = 1.1, alpha = 0.7) +
+    # Harvest lines for Kursk (dashed, thick)
+    geom_vline(data = harvest_Kursk, aes(xintercept = DAS),
+               linetype = "dashed", color = pal_harvest_line["Kursk"],
+               linewidth = 1.1, alpha = 0.7) +
+    # Phenophase labels for Moscow (top)
     geom_text(data = phase_DAS_Moscow_plot,
               aes(x = DAS + 0.5, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.95,
                   label = Phase_en),
-              angle = 90, hjust = 1, vjust = -0.2, size = 2.3,
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.2,
               color = pal_phase_line["Moscow"], fontface = "plain") +
-    # Labels for Kursk (bottom)
+    # Phenophase labels for Kursk (bottom)
     geom_text(data = phase_DAS_Kursk_plot,
               aes(x = DAS + 0.5, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.95,
                   label = Phase_en),
-              angle = 90, hjust = 1, vjust = 1.3, size = 2.3,
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.2,
               color = pal_phase_line["Kursk"], fontface = "plain") +
+    # Harvest labels for Moscow (middle-top)
+    geom_text(data = harvest_Moscow,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.75,
+                  label = Event_en),
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.5,
+              color = pal_harvest_line["Moscow"], fontface = "bold") +
+    # Harvest labels for Kursk (middle-bottom)
+    geom_text(data = harvest_Kursk,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$NEE_cum, na.rm = TRUE) * 0.75,
+                  label = Event_en),
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.5,
+              color = pal_harvest_line["Kursk"], fontface = "bold") +
     scale_color_manual(values = pal_site) +
     labs(
       title = "Cumulative NEE: Moscow vs Kursk",
-      subtitle = "Vertical lines: solid (Moscow), dashed (Kursk)",
+      subtitle = "Thin lines - phenophases, thick lines - harvest period. Solid (Moscow), dashed (Kursk)",
       x = "Days after sowing",
       y = expression("Cumulative NEE (g C"~m^{-2}*")")
     ) +
     theme_flux +
-    theme(plot.subtitle = element_text(size = 9, color = "gray40"))
+    theme(plot.subtitle = element_text(size = 8.5, color = "gray40"))
 
   plot_compare_cum_GPP_en <- ggplot(Daily_compare_veg, aes(x = DAS, y = GPP_cum, color = Site)) +
     geom_line(linewidth = 1.2) +
-    # Phenophase lines for Moscow (solid)
+    # Phenophase lines for Moscow (solid, thin)
     geom_vline(data = phase_DAS_Moscow_plot, aes(xintercept = DAS),
                linetype = "solid", color = pal_phase_line["Moscow"],
-               linewidth = 0.6, alpha = 0.5) +
-    # Phenophase lines for Kursk (dashed)
+               linewidth = 0.5, alpha = 0.4) +
+    # Phenophase lines for Kursk (dashed, thin)
     geom_vline(data = phase_DAS_Kursk_plot, aes(xintercept = DAS),
                linetype = "dashed", color = pal_phase_line["Kursk"],
-               linewidth = 0.6, alpha = 0.5) +
-    # Labels for Moscow (top)
+               linewidth = 0.5, alpha = 0.4) +
+    # Harvest lines for Moscow (solid, thick)
+    geom_vline(data = harvest_Moscow, aes(xintercept = DAS),
+               linetype = "solid", color = pal_harvest_line["Moscow"],
+               linewidth = 1.1, alpha = 0.7) +
+    # Harvest lines for Kursk (dashed, thick)
+    geom_vline(data = harvest_Kursk, aes(xintercept = DAS),
+               linetype = "dashed", color = pal_harvest_line["Kursk"],
+               linewidth = 1.1, alpha = 0.7) +
+    # Phenophase labels for Moscow (top)
     geom_text(data = phase_DAS_Moscow_plot,
               aes(x = DAS + 0.5, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.95,
                   label = Phase_en),
-              angle = 90, hjust = 1, vjust = -0.2, size = 2.3,
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.2,
               color = pal_phase_line["Moscow"], fontface = "plain") +
-    # Labels for Kursk (bottom)
+    # Phenophase labels for Kursk (bottom)
     geom_text(data = phase_DAS_Kursk_plot,
               aes(x = DAS + 0.5, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.95,
                   label = Phase_en),
-              angle = 90, hjust = 1, vjust = 1.3, size = 2.3,
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.2,
               color = pal_phase_line["Kursk"], fontface = "plain") +
+    # Harvest labels for Moscow (middle-top)
+    geom_text(data = harvest_Moscow,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.75,
+                  label = Event_en),
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.5,
+              color = pal_harvest_line["Moscow"], fontface = "bold") +
+    # Harvest labels for Kursk (middle-bottom)
+    geom_text(data = harvest_Kursk,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$GPP_cum, na.rm = TRUE) * 0.75,
+                  label = Event_en),
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.5,
+              color = pal_harvest_line["Kursk"], fontface = "bold") +
     scale_color_manual(values = pal_site) +
     labs(
       title = "Cumulative GPP: Moscow vs Kursk",
-      subtitle = "Vertical lines: solid (Moscow), dashed (Kursk)",
+      subtitle = "Thin lines - phenophases, thick lines - harvest period. Solid (Moscow), dashed (Kursk)",
       x = "Days after sowing",
       y = expression("Cumulative GPP (g C"~m^{-2}*")")
     ) +
     theme_flux +
-    theme(plot.subtitle = element_text(size = 9, color = "gray40"))
+    theme(plot.subtitle = element_text(size = 8.5, color = "gray40"))
 
   plot_compare_cum_Reco_en <- ggplot(Daily_compare_veg, aes(x = DAS, y = Reco_cum, color = Site)) +
     geom_line(linewidth = 1.2) +
-    # Phenophase lines for Moscow (solid)
+    # Phenophase lines for Moscow (solid, thin)
     geom_vline(data = phase_DAS_Moscow_plot, aes(xintercept = DAS),
                linetype = "solid", color = pal_phase_line["Moscow"],
-               linewidth = 0.6, alpha = 0.5) +
-    # Phenophase lines for Kursk (dashed)
+               linewidth = 0.5, alpha = 0.4) +
+    # Phenophase lines for Kursk (dashed, thin)
     geom_vline(data = phase_DAS_Kursk_plot, aes(xintercept = DAS),
                linetype = "dashed", color = pal_phase_line["Kursk"],
-               linewidth = 0.6, alpha = 0.5) +
-    # Labels for Moscow (top)
+               linewidth = 0.5, alpha = 0.4) +
+    # Harvest lines for Moscow (solid, thick)
+    geom_vline(data = harvest_Moscow, aes(xintercept = DAS),
+               linetype = "solid", color = pal_harvest_line["Moscow"],
+               linewidth = 1.1, alpha = 0.7) +
+    # Harvest lines for Kursk (dashed, thick)
+    geom_vline(data = harvest_Kursk, aes(xintercept = DAS),
+               linetype = "dashed", color = pal_harvest_line["Kursk"],
+               linewidth = 1.1, alpha = 0.7) +
+    # Phenophase labels for Moscow (top)
     geom_text(data = phase_DAS_Moscow_plot,
               aes(x = DAS + 0.5, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.95,
                   label = Phase_en),
-              angle = 90, hjust = 1, vjust = -0.2, size = 2.3,
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.2,
               color = pal_phase_line["Moscow"], fontface = "plain") +
-    # Labels for Kursk (bottom)
+    # Phenophase labels for Kursk (bottom)
     geom_text(data = phase_DAS_Kursk_plot,
               aes(x = DAS + 0.5, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.95,
                   label = Phase_en),
-              angle = 90, hjust = 1, vjust = 1.3, size = 2.3,
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.2,
               color = pal_phase_line["Kursk"], fontface = "plain") +
+    # Harvest labels for Moscow (middle-top)
+    geom_text(data = harvest_Moscow,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.75,
+                  label = Event_en),
+              angle = 90, hjust = 1, vjust = -0.2, size = 2.5,
+              color = pal_harvest_line["Moscow"], fontface = "bold") +
+    # Harvest labels for Kursk (middle-bottom)
+    geom_text(data = harvest_Kursk,
+              aes(x = DAS + 0.5, y = max(Daily_compare_veg$Reco_cum, na.rm = TRUE) * 0.75,
+                  label = Event_en),
+              angle = 90, hjust = 1, vjust = 1.3, size = 2.5,
+              color = pal_harvest_line["Kursk"], fontface = "bold") +
     scale_color_manual(values = pal_site) +
     labs(
       title = "Cumulative Reco: Moscow vs Kursk",
-      subtitle = "Vertical lines: solid (Moscow), dashed (Kursk)",
+      subtitle = "Thin lines - phenophases, thick lines - harvest period. Solid (Moscow), dashed (Kursk)",
       x = "Days after sowing",
       y = expression("Cumulative Reco (g C"~m^{-2}*")")
     ) +
     theme_flux +
-    theme(plot.subtitle = element_text(size = 9, color = "gray40"))
+    theme(plot.subtitle = element_text(size = 8.5, color = "gray40"))
 
   # Print all comparison plots
   print(plot_compare_diurnal_NEE)
