@@ -1168,16 +1168,33 @@ if (file.exists(moscow_file)) {
       .groups = "drop"
     )
 
-  # Create complete day sequences for each site from sowing to harvest
+  # Get actual data ranges for each site
+  actual_range_Moscow <- Daily_compare_raw %>%
+    filter(Site == "Moscow") %>%
+    summarise(min_DoY = min(DoY, na.rm = TRUE), max_DoY = max(DoY, na.rm = TRUE))
+
+  actual_range_Kursk <- Daily_compare_raw %>%
+    filter(Site == "Kursk") %>%
+    summarise(min_DoY = min(DoY, na.rm = TRUE), max_DoY = max(DoY, na.rm = TRUE))
+
+  # Create complete day sequences based on ACTUAL data range (not fixed phenophase dates)
+  # This prevents filling leading days with zeros when data starts later
   complete_Moscow <- data.frame(
     Site = "Moscow",
-    DoY = seq(sowing_Moscow, yday(B_Moscow$Harvesting))
+    DoY = seq(actual_range_Moscow$min_DoY, actual_range_Moscow$max_DoY)
   )
   complete_Kursk <- data.frame(
     Site = "Kursk",
-    DoY = seq(sowing_Kursk, 226)
+    DoY = seq(actual_range_Kursk$min_DoY, actual_range_Kursk$max_DoY)
   )
   complete_both <- bind_rows(complete_Moscow, complete_Kursk)
+
+  # Calculate actual sowing DoY based on first data point and known DAS to emergence
+  # For Moscow: Emergence is DoY 137 (May 17), which is 3 days after sowing (May 14 = DoY 134)
+  # For Kursk: Emergence is DoY 118, which is 3 days after sowing (DoY 115)
+  # Use actual first data DoY as reference
+  actual_sowing_Moscow <- sowing_Moscow  # Keep original DoY 134
+  actual_sowing_Kursk <- actual_range_Kursk$min_DoY - (118 - 115)  # Adjust based on data start
 
   # Merge with actual data, fill missing days with zeros
   Daily_compare <- complete_both %>%
@@ -1186,7 +1203,7 @@ if (file.exists(moscow_file)) {
       NEE_sum = ifelse(is.na(NEE_sum), 0, NEE_sum),
       GPP_sum = ifelse(is.na(GPP_sum), 0, GPP_sum),
       Reco_sum = ifelse(is.na(Reco_sum), 0, Reco_sum),
-      DAS = ifelse(Site == "Moscow", DoY - sowing_Moscow, DoY - sowing_Kursk)
+      DAS = ifelse(Site == "Moscow", DoY - actual_sowing_Moscow, DoY - actual_sowing_Kursk)
     ) %>%
     group_by(Site) %>%
     arrange(DAS) %>%
