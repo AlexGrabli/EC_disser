@@ -1249,19 +1249,18 @@ if (file.exists(moscow_file)) {
   )
 
   # Harvest period boundaries (in days after sowing)
+  # Only harvest start lines (harvest end removed for cleaner visualization)
   harvest_Moscow <- data.frame(
-    Event = c("Начало уборки", "Окончание уборки"),
-    Event_en = c("Harvest start", "Harvest end"),
-    DAS = c(yday(B_Moscow$HarvestStart) - sowing_Moscow,    # DAS 93
-            yday(B_Moscow$HarvestEnd) - sowing_Moscow),     # DAS 119
+    Event = c("Начало уборки"),
+    Event_en = c("Harvest start"),
+    DAS = c(yday(B_Moscow$HarvestStart) - sowing_Moscow),    # DAS 93
     Site = "Moscow"
   )
 
   harvest_Kursk <- data.frame(
-    Event = c("Начало уборки", "Окончание уборки"),
-    Event_en = c("Harvest start", "Harvest end"),
-    DAS = c(Harvest_Kursk$HarvestStart_DoY - sowing_Kursk,  # DAS 112
-            Harvest_Kursk$HarvestEnd_DoY - sowing_Kursk),   # DAS 130
+    Event = c("Начало уборки"),
+    Event_en = c("Harvest start"),
+    DAS = c(Harvest_Kursk$HarvestStart_DoY - sowing_Kursk),  # DAS 112
     Site = "Kursk"
   )
 
