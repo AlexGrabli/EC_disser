@@ -132,7 +132,7 @@ load_biomet_2013 <- function(path) {
 }
 
 # ----------------------- Загрузка данных 2016 (Москва) -----------------------
-load_biomet_2016 <- function(flux_path, precip_path) {
+load_biomet_2016 <- function(flux_path, precip_path, swc_biomet_path = NULL) {
   # Основные данные из файла с gap-filling
   raw <- read_csv(flux_path, show_col_types = FALSE)
   names(raw) <- trimws(names(raw))
@@ -161,7 +161,7 @@ load_biomet_2016 <- function(flux_path, precip_path) {
     VPD = vpd,
     PPFD = ppfd,
     Tsoil = tsoil,
-    SWC = NA_real_,  # Нет данных по влажности почвы в этом файле
+    SWC = NA_real_,
     Precip = NA_real_
   ) %>%
     filter(!is.na(DateTime))
@@ -185,6 +185,59 @@ load_biomet_2016 <- function(flux_path, precip_path) {
       left_join(precip_data, by = "DateTime") %>%
       mutate(Precip = coalesce(Precip_ext, Precip)) %>%
       select(-Precip_ext)
+  }
+
+  # Загрузка влажности почвы из 2016BiomB.csv
+  if (!is.null(swc_biomet_path) && file.exists(swc_biomet_path)) {
+    cat("  Загружаем влажность почвы из 2016BiomB.csv...\n")
+
+    # Определяем разделитель
+    first_line <- read_lines(swc_biomet_path, n_max = 1)
+    delim <- ifelse(str_detect(first_line, ";"), ";", ",")
+
+    swc_raw <- read_delim(swc_biomet_path, delim = delim, show_col_types = FALSE)
+    names(swc_raw) <- trimws(names(swc_raw))
+
+    # Парсим дату (ищем столбцы DATE_1/TIME_1 или TIMESTAMP)
+    if ("DATE_1" %in% names(swc_raw) && "TIME_1" %in% names(swc_raw)) {
+      swc_dt <- parse_dt_guess(paste(swc_raw$DATE_1, swc_raw$TIME_1))
+    } else if ("TIMESTAMP" %in% names(swc_raw)) {
+      swc_dt <- parse_dt_guess(swc_raw$TIMESTAMP)
+    } else {
+      swc_dt <- parse_dt_guess(swc_raw[[1]])
+    }
+
+    # Ищем столбцы VWC_число_Avg
+    swc_cols <- grep("^VWC_\\d+_Avg$", names(swc_raw), value = TRUE)
+    cat(sprintf("    Найдено %d столбцов VWC: %s\n", length(swc_cols), paste(swc_cols, collapse = ", ")))
+
+    if (length(swc_cols) > 0) {
+      # Извлекаем данные, заменяем NA/NAN на 0
+      swc_mat <- sapply(swc_cols, function(c) {
+        vals <- to_num(swc_raw[[c]])
+        vals[is.na(vals) | !is.finite(vals)] <- 0
+        vals
+      })
+
+      # Вычисляем среднее и переводим в % (м³/м³ * 100)
+      swc_mean <- rowMeans(swc_mat, na.rm = TRUE) * 100
+
+      swc_data <- tibble(
+        DateTime = swc_dt,
+        SWC_ext = swc_mean
+      ) %>%
+        filter(!is.na(DateTime))
+
+      cat(sprintf("    Диапазон SWC: %.1f%% - %.1f%%\n",
+                  min(swc_data$SWC_ext, na.rm = TRUE),
+                  max(swc_data$SWC_ext, na.rm = TRUE)))
+
+      # Присоединяем к основным данным
+      biomet <- biomet %>%
+        left_join(swc_data, by = "DateTime") %>%
+        mutate(SWC = coalesce(SWC_ext, SWC)) %>%
+        select(-SWC_ext)
+    }
   }
 
   biomet
@@ -472,6 +525,7 @@ cat("\n=== Построение графиков метеоусловий по �
 biomet_2013_path <- "biomet2013.csv"
 biomet_2016_path <- "Moscow_2016_verFin.csv"
 precip_2016_path <- "2016_precip.csv"
+swc_2016_path <- "2016BiomB.csv"  # Файл с влажностью почвы для 2016
 gapfilled_2023_path <- "ИТОГ2_BarleyFilledAllScen_65p_biom_thrash_new2505.csv"
 biomet_2023_path <- "Anal11_biomet.csv"
 precip_2023_path <- "Осадки.csv"
@@ -485,7 +539,7 @@ cat(sprintf("  Загружено %d записей, диапазон: %s - %s\n
             max(biomet_2013$Date, na.rm = TRUE)))
 
 cat("\nЗагрузка данных 2016 (Москва)...\n")
-biomet_2016 <- load_biomet_2016(biomet_2016_path, precip_2016_path)
+biomet_2016 <- load_biomet_2016(biomet_2016_path, precip_2016_path, swc_2016_path)
 cat(sprintf("  Загружено %d записей, диапазон: %s - %s\n",
             nrow(biomet_2016),
             min(biomet_2016$Date, na.rm = TRUE),
