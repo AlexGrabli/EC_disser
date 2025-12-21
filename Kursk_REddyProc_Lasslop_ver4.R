@@ -923,6 +923,7 @@ if (file.exists(moscow_file)) {
   col_nee <- pick_col(nm, c("nee_u50_f", "nee_ustar_f", "nee_filled", "nee_f", "nee"))
   col_le <- pick_col(nm, c("le_f", "le_orig", "le"))
   col_rg <- pick_col(nm, c("rg_f", "rg_orig", "rg", "sw_in"))
+  col_tair <- pick_col(nm, c("tair_f", "tair_orig", "tair", "ta_f", "ta"))
 
   Moscow <- data.frame(
     Site = "Moscow",
@@ -936,6 +937,7 @@ if (file.exists(moscow_file)) {
   Moscow$Reco <- if (!is.na(col_reco)) as.numeric(moscow_raw[[col_reco]]) else NA
   Moscow$LE <- if (!is.na(col_le)) as.numeric(moscow_raw[[col_le]]) else NA
   Moscow$Rg <- if (!is.na(col_rg)) as.numeric(moscow_raw[[col_rg]]) else NA
+  Moscow$Tair <- if (!is.na(col_tair)) as.numeric(moscow_raw[[col_tair]]) else NA
   Moscow$PPFD <- bigleaf::Rg.to.PPFD(Moscow$Rg)
   Moscow$Phase_ru <- assign_phase_moscow(Moscow$DateTime)
 
@@ -954,6 +956,7 @@ if (file.exists(moscow_file)) {
     Reco = Results$Reco_DT,
     LE = Results$LE_f,
     Rg = Results$Rg_f,
+    Tair = Results$Tair_f,
     PPFD = Results$PPFD,
     Phase_ru = Results$Phase_ru,
     E_mmol = Results$E_mmol,
@@ -962,7 +965,10 @@ if (file.exists(moscow_file)) {
 
   # Combine datasets
   Compare <- bind_rows(Moscow, Kursk) %>%
-    filter(!is.na(Phase_ru))
+    filter(!is.na(Phase_ru)) %>%
+    # Calculate NEE as Reco - GPP (for verification)
+    # NEE = Reco - GPP (where negative NEE means net CO2 uptake)
+    mutate(NEE_calc = Reco - GPP)
 
   # Color palette
   pal_site <- c("Moscow" = "#1b9e77", "Kursk" = "#d95f02")
@@ -1061,24 +1067,53 @@ if (file.exists(moscow_file)) {
     group_by(Site, Phase_ru, PPFD_bin) %>%
     summarise(PPFD = mean(PPFD), GPP = mean(GPP), n = n(), .groups = "drop")
 
-  # Fit function
+  # Fit function with improved robustness (matching fit_lrc_group from main script)
   fit_lrc <- function(dat) {
     dat <- arrange(dat, PPFD)
-    if (nrow(dat) < 5 || diff(range(dat$PPFD)) < 200)
+    if (nrow(dat) < 5 || diff(range(dat$PPFD)) < 200 || var(dat$GPP, na.rm = TRUE) < 0.1)
       return(tibble(alpha = NA_real_, beta = NA_real_))
 
-    a0 <- 0.03; b0 <- max(dat$GPP, na.rm = TRUE) * 0.9
-    fit <- try(nls(GPP ~ (alpha * beta * PPFD) / (alpha * PPFD + beta),
-                   data = dat, start = list(alpha = a0, beta = b0),
-                   algorithm = "port",
-                   lower = c(1e-4, 1), upper = c(0.2, 60),
-                   control = nls.control(maxiter = 500, warnOnly = TRUE)), silent = TRUE)
+    # Starting values - estimate alpha from low PPFD data
+    low <- dat %>% filter(PPFD <= quantile(PPFD, 0.2, na.rm = TRUE))
+    if (nrow(low) >= 3 && sum(!is.na(low$GPP) & !is.na(low$PPFD)) >= 3) {
+      a0 <- suppressWarnings(coef(lm(GPP ~ 0 + PPFD, data = low)))[1]
+      if (!is.finite(a0)) a0 <- 0.03
+    } else {
+      a0 <- 0.03
+    }
+    a0 <- min(max(a0, 0.005), 0.12)
+    b0 <- quantile(dat$GPP, 0.95, na.rm = TRUE)
+    if (!is.finite(b0) || b0 <= 0) b0 <- max(dat$GPP, na.rm = TRUE)
+    b0 <- min(max(b0, 5), 40)
+
+    fit <- try(
+      nls(GPP ~ (alpha * beta * PPFD) / (alpha * PPFD + beta),
+          data = dat,
+          start = list(alpha = a0, beta = b0),
+          algorithm = "port",
+          lower = c(alpha = 1e-4, beta = 1),
+          upper = c(alpha = 0.2, beta = 60),
+          control = nls.control(maxiter = 500, warnOnly = TRUE)),
+      silent = TRUE
+    )
 
     if (!inherits(fit, "try-error")) {
       co <- coef(fit)
       return(tibble(alpha = unname(co["alpha"]), beta = unname(co["beta"])))
     }
-    tibble(alpha = NA_real_, beta = NA_real_)
+
+    # Fallback: grid search if nls fails
+    grid_a <- c(0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12)
+    grid_b <- c(5, 8, 10, 15, 20, 30, 40)
+    best <- list(a = NA_real_, b = NA_real_, rss = Inf)
+    for (aa in grid_a) {
+      for (bb in grid_b) {
+        pred <- (aa * bb * dat$PPFD) / (aa * dat$PPFD + bb)
+        rss <- sum((dat$GPP - pred)^2, na.rm = TRUE)
+        if (is.finite(rss) && rss < best$rss) best <- list(a = aa, b = bb, rss = rss)
+      }
+    }
+    tibble(alpha = best$a, beta = best$b)
   }
 
   coef_compare <- binned_compare %>%
@@ -1173,7 +1208,8 @@ if (file.exists(moscow_file)) {
     group_by(Site, Date) %>%
     summarise(
       DoY = first(DoY),
-      NEE_sum = sum(NEE, na.rm = TRUE) * 12 * 1800 / 10^6,
+      NEE_sum = sum(NEE, na.rm = TRUE) * 12 * 1800 / 10^6,  # NEE_f from gap-filling
+      NEE_calc_sum = sum(NEE_calc, na.rm = TRUE) * 12 * 1800 / 10^6,  # NEE calculated as Reco - GPP
       GPP_sum = sum(GPP, na.rm = TRUE) * 12 * 1800 / 10^6,
       Reco_sum = sum(Reco, na.rm = TRUE) * 12 * 1800 / 10^6,
       # Active temperature sum (GDD - Growing Degree Days)
@@ -1218,6 +1254,7 @@ if (file.exists(moscow_file)) {
     left_join(Daily_compare_raw, by = c("Site", "DoY")) %>%
     mutate(
       NEE_sum = ifelse(is.na(NEE_sum), 0, NEE_sum),
+      NEE_calc_sum = ifelse(is.na(NEE_calc_sum), 0, NEE_calc_sum),
       GPP_sum = ifelse(is.na(GPP_sum), 0, GPP_sum),
       Reco_sum = ifelse(is.na(Reco_sum), 0, Reco_sum),
       GDD_sum = ifelse(is.na(GDD_sum), 0, GDD_sum),
@@ -1226,7 +1263,8 @@ if (file.exists(moscow_file)) {
     group_by(Site) %>%
     arrange(DAS) %>%
     mutate(
-      NEE_cum = cumsum(NEE_sum),
+      NEE_cum = cumsum(NEE_sum),  # Cumulative NEE from NEE_f
+      NEE_calc_cum = cumsum(NEE_calc_sum),  # Cumulative NEE from Reco - GPP
       GPP_cum = cumsum(GPP_sum),
       Reco_cum = cumsum(Reco_sum),
       GDD_cum = cumsum(GDD_sum)
@@ -1236,7 +1274,18 @@ if (file.exists(moscow_file)) {
   # Filter to vegetation period (days from sowing to end of harvest)
   # Extended to 135 DAS to cover both sites' harvest end
   Daily_compare_veg <- Daily_compare %>%
-    filter(DAS >= 0 & DAS <= 135)
+    filter(DAS >= 0 & DAS <= 135) %>%
+    # Recalculate cumulative sums after filtering to ensure they start from 0 at DAS = 0
+    group_by(Site) %>%
+    arrange(DAS) %>%
+    mutate(
+      NEE_cum = cumsum(NEE_sum),  # Cumulative NEE from NEE_f
+      NEE_calc_cum = cumsum(NEE_calc_sum),  # Cumulative NEE from Reco - GPP
+      GPP_cum = cumsum(GPP_sum),
+      Reco_cum = cumsum(Reco_sum),
+      GDD_cum = cumsum(GDD_sum)
+    ) %>%
+    ungroup()
 
   # Phenophase boundaries in days after sowing
   phase_DAS_Moscow <- data.frame(
@@ -1751,9 +1800,477 @@ if (file.exists(moscow_file)) {
   cat("Moscow records:", sum(Compare_export$Site == "Moscow"), "\n")
   cat("Kursk records:", sum(Compare_export$Site == "Kursk"), "\n")
 
+  # -----------------------------------------------------------------------------
+  # 8.6 Final Cumulative Summary Table
+  # -----------------------------------------------------------------------------
+  
+  cat("\n========================================\n")
+  cat("ИТОГОВЫЕ КУМУЛЯТИВНЫЕ СУММЫ ЗА ВЕГЕТАЦИОННЫЙ ПЕРИОД\n")
+  cat("========================================\n")
+  
+  # Calculate final cumulative values for each site
+  cumulative_summary <- Daily_compare_veg %>%
+    group_by(Site) %>%
+    summarise(
+      Start_DAS = min(DAS, na.rm = TRUE),
+      End_DAS = max(DAS, na.rm = TRUE),
+      Days_veg = as.numeric(End_DAS - Start_DAS) + 1,
+      GPP_total_gC = last(GPP_cum),
+      Reco_total_gC = last(Reco_cum),
+      NEE_total_gC = last(NEE_cum),  # From NEE_f (gap-filled)
+      NEE_calc_total_gC = last(NEE_calc_cum),  # From Reco - GPP
+      GDD_total = last(GDD_cum),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      # Compare cumulative NEE_f with cumulative (Reco - GPP)
+      # NEE = Reco - GPP (where negative NEE means net CO2 uptake)
+      # Calculate absolute difference
+      NEE_diff = abs(NEE_total_gC - NEE_calc_total_gC),
+      # Calculate percentage difference using the larger absolute value as denominator
+      NEE_diff_pct = ifelse(pmax(abs(NEE_total_gC), abs(NEE_calc_total_gC)) > 0.1,
+                            (NEE_diff / pmax(abs(NEE_total_gC), abs(NEE_calc_total_gC))) * 100,
+                            NA_real_),
+      # Check if difference is within 10%
+      NEE_check = ifelse(is.na(NEE_diff_pct), "N/A",
+                         ifelse(NEE_diff_pct <= 10, "OK", "WARNING"))
+    )
+  
+  # Format summary table for display
+  cumulative_summary_display <- cumulative_summary %>%
+    mutate(
+      GPP_total_gC = round(GPP_total_gC, 2),
+      Reco_total_gC = round(Reco_total_gC, 2),
+      NEE_total_gC = round(NEE_total_gC, 2),  # From NEE_f
+      NEE_calc_total_gC = round(NEE_calc_total_gC, 2),  # From Reco - GPP
+      GDD_total = round(GDD_total, 1),
+      NEE_diff = round(NEE_diff, 2),
+      NEE_diff_pct = round(NEE_diff_pct, 2)
+    )
+  
+  # Print summary table
+  cat("\nСравнение кумулятивных сумм:\n")
+  cat("NEE_total_gC - из NEE_f (gap-filled)\n")
+  cat("NEE_calc_total_gC - из Reco - GPP (рассчитанный)\n\n")
+  print(cumulative_summary_display)
+  
+  # Check for warnings
+  warnings_found <- cumulative_summary %>%
+    filter(NEE_check == "WARNING")
+  
+  if (nrow(warnings_found) > 0) {
+    cat("\n⚠ ВНИМАНИЕ: Обнаружены расхождения между NEE_f и (Reco - GPP) > 10%:\n")
+    print(warnings_found %>% 
+          select(Site, NEE_total_gC, NEE_calc_total_gC, NEE_diff, NEE_diff_pct) %>%
+          mutate(
+            NEE_total_gC = round(NEE_total_gC, 2),
+            NEE_calc_total_gC = round(NEE_calc_total_gC, 2),
+            NEE_diff = round(NEE_diff, 2),
+            NEE_diff_pct = round(NEE_diff_pct, 2)
+          ))
+  } else {
+    cat("\n✓ Проверка пройдена: все расхождения между NEE_f и (Reco - GPP) в пределах 10%\n")
+  }
+  
+  # Save summary table
+  write.csv(cumulative_summary, "output_Kursk/cumulative_summary_final.csv", row.names = FALSE)
+  cat("\n✓ Итоговая таблица сохранена: output_Kursk/cumulative_summary_final.csv\n")
+
   cat("\nComparative analysis completed.\n")
 
 } else {
   cat("\nWarning: Moscow data file not found:", moscow_file, "\n")
   cat("Skipping comparative analysis.\n")
+}
+
+# =============================================================================
+# 9. METEO PLOTS FROM kurskfilled.csv
+# =============================================================================
+
+meteo_file_kursk <- "kurskfilled.csv"
+if (file.exists(meteo_file_kursk)) {
+  meteo_raw <- data.table::fread(meteo_file_kursk, encoding = "UTF-8")
+  names(meteo_raw) <- trimws(names(meteo_raw))
+  nm <- names(meteo_raw)
+
+  pick_first_present <- function(nm, candidates) {
+    nm_lower <- tolower(nm)
+    candidates_lower <- tolower(candidates)
+    for (cand in candidates_lower) {
+      idx <- which(nm_lower == cand)
+      if (length(idx) > 0) return(nm[idx[1]])
+    }
+    NA_character_
+  }
+
+  to_num <- function(x) suppressWarnings(as.numeric(x))
+  has_values <- function(x) sum(is.finite(x)) > 2
+  gap_fill_by_doy <- function(doy, x) {
+    ok <- is.finite(doy) & is.finite(x)
+    if (sum(ok) < 2) return(x)
+    x_filled <- x
+    x_filled[!ok] <- approx(doy[ok], x[ok], doy[!ok], rule = 2)$y
+    x_filled
+  }
+  parse_date_any <- function(x) {
+    x_num <- suppressWarnings(as.numeric(x))
+    if (sum(is.finite(x_num)) > 0) {
+      return(as.Date(x_num, origin = "1899-12-30"))
+    }
+    d1 <- suppressWarnings(as.Date(x))
+    if (all(is.na(d1))) {
+      d1 <- suppressWarnings(lubridate::ymd(x))
+    }
+    d1
+  }
+  convert_vpd_to_pa <- function(x) {
+    if (!has_values(x)) return(x)
+    v_q90 <- suppressWarnings(quantile(x, 0.9, na.rm = TRUE))
+    if (!is.finite(v_q90)) return(x)
+    if (v_q90 <= 20) return(x * 1000)  # kPa -> Pa
+    if (v_q90 <= 200) return(x * 100)  # hPa -> Pa
+    x
+  }
+
+  col_doy <- pick_first_present(nm, c("Doy", "DOY", "doy", "DayOfYear", "dayofyear"))
+  col_date <- pick_first_present(nm, c("date", "Date"))
+  col_par <- pick_first_present(nm, c("PAR_f", "PPFD_f", "PPFD_f_mean", "PPFD_f_avg"))
+  col_tair <- pick_first_present(nm, c("Tair_f", "TA_f", "Ta_f", "tair_f"))
+  col_rh <- pick_first_present(nm, c("RH_f", "rH_f", "rh_f"))
+  col_tsoil <- pick_first_present(nm, c("Tsoil_f", "TS_f", "tsoil_f"))
+  col_swc <- pick_first_present(nm, c("SWC_f", "swc_f"))
+  col_vpd <- pick_first_present(nm, c("VPD_f", "vpd_f"))
+  col_precip <- pick_first_present(nm, c("Rain_mm_Tot_sums"))
+
+  if (is.na(col_doy)) {
+    stop("В kurskfilled.csv не найдена колонка дня года (Doy/DOY).")
+  }
+
+  missing_cols <- c(
+    PAR_f = is.na(col_par),
+    Tair_f = is.na(col_tair),
+    RH_f = is.na(col_rh),
+    Tsoil_f = is.na(col_tsoil),
+    SWC_f = is.na(col_swc),
+    VPD_f = is.na(col_vpd),
+    Precip = is.na(col_precip)
+  )
+
+  if (any(missing_cols)) {
+    cat("\n[meteo] Предупреждение: не найдены колонки:\n")
+    cat(paste0("  - ", names(missing_cols)[missing_cols], collapse = "\n"), "\n")
+  }
+
+  meteo_kursk <- data.frame(
+    Doy = to_num(meteo_raw[[col_doy]]),
+    Date = if (!is.na(col_date)) parse_date_any(meteo_raw[[col_date]]) else as.Date(NA),
+    PAR = if (!is.na(col_par)) to_num(meteo_raw[[col_par]]) else NA_real_,
+    Tair = if (!is.na(col_tair)) to_num(meteo_raw[[col_tair]]) else NA_real_,
+    RH = if (!is.na(col_rh)) to_num(meteo_raw[[col_rh]]) else NA_real_,
+    Tsoil = if (!is.na(col_tsoil)) to_num(meteo_raw[[col_tsoil]]) else NA_real_,
+    SWC = if (!is.na(col_swc)) to_num(meteo_raw[[col_swc]]) else NA_real_,
+    VPD = if (!is.na(col_vpd)) to_num(meteo_raw[[col_vpd]]) else NA_real_,
+    Precip = if (!is.na(col_precip)) to_num(meteo_raw[[col_precip]]) else NA_real_
+  )
+
+  meteo_kursk <- meteo_kursk %>%
+    filter(is.finite(Doy)) %>%
+    arrange(Doy)
+
+  need_rh <- !has_values(meteo_kursk$RH)
+  need_vpd <- !has_values(meteo_kursk$VPD)
+  fill_rh <- any(!is.finite(meteo_kursk$RH))
+  fill_vpd <- any(!is.finite(meteo_kursk$VPD))
+  need_swc <- !has_values(meteo_kursk$SWC)
+  need_tsoil <- !has_values(meteo_kursk$Tsoil)
+  prefer_swc_20 <- TRUE
+  prefer_tsoil_20 <- TRUE
+
+  if (need_rh || need_vpd || fill_rh || fill_vpd || need_swc || need_tsoil ||
+      prefer_swc_20 || prefer_tsoil_20) {
+    meteo_half_file <- "Kursk_data_half_our.csv"
+    if (file.exists(meteo_half_file)) {
+      meteo_half_raw <- data.table::fread(meteo_half_file, encoding = "UTF-8")
+      names(meteo_half_raw) <- trimws(names(meteo_half_raw))
+      nm_half <- names(meteo_half_raw)
+
+      col_dt <- pick_first_present(nm_half, c("DateTime", "datetime", "date_time", "timestamp"))
+      col_rh_hh <- pick_first_present(nm_half, c("rH_f", "RH_f", "rh_f"))
+      col_vpd_hh <- pick_first_present(nm_half, c("VPD_f", "vpd_f"))
+      col_swc_20 <- pick_first_present(nm_half, c("SWC_avg_20cm_Avg", "swc_avg_20cm_avg"))
+      col_swc_10 <- pick_first_present(nm_half, c("SWC_avg_10cm_Avg", "swc_avg_10cm_avg"))
+      col_swc_50 <- pick_first_present(nm_half, c("SWC_avg_50cm_Avg", "swc_avg_50cm_avg"))
+      col_ts_20 <- pick_first_present(nm_half, c("Ts_avg_20cm_Avg", "ts_avg_20cm_avg"))
+      col_ts_50 <- pick_first_present(nm_half, c("Ts_avg_50cm_Avg", "ts_avg_50cm_avg"))
+
+      col_swc_use <- if (!is.na(col_swc_20)) col_swc_20 else if (!is.na(col_swc_10)) col_swc_10 else col_swc_50
+      col_ts_use <- if (!is.na(col_ts_20)) col_ts_20 else col_ts_50
+
+      if (is.na(col_swc_20) && !is.na(col_swc_use)) {
+        cat(sprintf("\n[meteo] SWC_avg_20cm_Avg not found, using %s.\n", col_swc_use))
+      }
+      if (is.na(col_ts_20) && !is.na(col_ts_use)) {
+        cat(sprintf("\n[meteo] Ts_avg_20cm_Avg not found, using %s.\n", col_ts_use))
+      }
+
+      if (!is.na(col_dt) && (!is.na(col_rh_hh) || !is.na(col_vpd_hh) ||
+                             !is.na(col_swc_use) || !is.na(col_ts_use))) {
+        dt_raw <- meteo_half_raw[[col_dt]]
+        dt_parsed <- suppressWarnings(lubridate::ymd_hms(dt_raw, tz = "UTC"))
+        if (all(is.na(dt_parsed))) {
+          dt_parsed <- suppressWarnings(lubridate::ymd_hm(dt_raw, tz = "UTC"))
+        }
+
+        meteo_half <- data.frame(
+          DateTime = dt_parsed,
+          RH = if (!is.na(col_rh_hh)) to_num(meteo_half_raw[[col_rh_hh]]) else NA_real_,
+          VPD = if (!is.na(col_vpd_hh)) to_num(meteo_half_raw[[col_vpd_hh]]) else NA_real_,
+          SWC = if (!is.na(col_swc_use)) to_num(meteo_half_raw[[col_swc_use]]) else NA_real_,
+          Tsoil = if (!is.na(col_ts_use)) to_num(meteo_half_raw[[col_ts_use]]) else NA_real_
+        )
+
+        mean_or_na <- function(x) if (all(!is.finite(x))) NA_real_ else mean(x, na.rm = TRUE)
+
+        meteo_half_daily <- meteo_half %>%
+          filter(!is.na(DateTime)) %>%
+          mutate(Doy = yday(DateTime)) %>%
+          group_by(Doy) %>%
+          summarise(
+            Date_hh = min(as.Date(DateTime)),
+            RH_hh = mean_or_na(RH),
+            VPD_hh = mean_or_na(VPD),
+            SWC_hh = mean_or_na(SWC),
+            Tsoil_hh = mean_or_na(Tsoil),
+            .groups = "drop"
+          )
+
+        meteo_kursk <- meteo_kursk %>%
+          left_join(meteo_half_daily, by = "Doy") %>%
+          mutate(
+            Date = dplyr::coalesce(Date_hh, Date),
+            RH = ifelse(is.finite(RH), RH, RH_hh),
+            VPD = ifelse(is.finite(VPD), VPD, VPD_hh),
+            SWC = ifelse(is.finite(SWC_hh), SWC_hh, SWC),
+            Tsoil = ifelse(is.finite(Tsoil_hh), Tsoil_hh, Tsoil)
+          ) %>%
+          select(-Date_hh, -RH_hh, -VPD_hh, -SWC_hh, -Tsoil_hh)
+      } else {
+        cat("\n[meteo] Kursk_data_half_our.csv: нет DateTime или RH/VPD колонок для заполнения.\n")
+      }
+    } else {
+      cat("\n[meteo] Файл Kursk_data_half_our.csv не найден для заполнения RH/VPD.\n")
+    }
+  }
+
+  if (!has_values(meteo_kursk$PAR)) {
+    reddy_file <- "Kursk_REddyProc_results_halfhourly.csv"
+    if (file.exists(reddy_file)) {
+      meteo_rp <- data.table::fread(reddy_file, encoding = "UTF-8")
+      names(meteo_rp) <- trimws(names(meteo_rp))
+      nm_rp <- names(meteo_rp)
+
+      col_rg_f <- pick_first_present(nm_rp, c("Rg_f", "rg_f"))
+      col_doy_rp <- pick_first_present(nm_rp, c("DoY", "DOY", "doy"))
+      col_dt_rp <- pick_first_present(nm_rp, c("DateTime", "datetime", "date_time", "timestamp"))
+
+      if (!is.na(col_rg_f) && (!is.na(col_doy_rp) || !is.na(col_dt_rp))) {
+        rg_f <- to_num(meteo_rp[[col_rg_f]])
+        if (!is.na(col_doy_rp)) {
+          doy_vals <- to_num(meteo_rp[[col_doy_rp]])
+        } else {
+          dt_raw <- meteo_rp[[col_dt_rp]]
+          dt_parsed <- suppressWarnings(lubridate::ymd_hms(dt_raw, tz = "UTC"))
+          if (all(is.na(dt_parsed))) {
+            dt_parsed <- suppressWarnings(lubridate::ymd_hm(dt_raw, tz = "UTC"))
+          }
+          doy_vals <- yday(dt_parsed)
+        }
+
+        ppfd_f <- bigleaf::Rg.to.PPFD(rg_f)
+        meteo_ppfd_daily <- data.frame(Doy = doy_vals, PAR_f = ppfd_f) %>%
+          filter(is.finite(Doy)) %>%
+          group_by(Doy) %>%
+          summarise(PAR_f = mean(PAR_f, na.rm = TRUE), .groups = "drop")
+
+        meteo_kursk <- meteo_kursk %>%
+          left_join(meteo_ppfd_daily, by = "Doy") %>%
+          mutate(PAR = ifelse(is.finite(PAR), PAR, PAR_f)) %>%
+          select(-PAR_f)
+      } else {
+        cat("\n[meteo] Kursk_REddyProc_results_halfhourly.csv: missing Rg_f or DoY/DateTime for PPFD_f.\n")
+      }
+    } else {
+      cat("\n[meteo] Kursk_REddyProc_results_halfhourly.csv not found for PPFD_f.\n")
+    }
+  }
+
+  meteo_kursk <- meteo_kursk %>%
+    mutate(
+      Tsoil = gap_fill_by_doy(Doy, Tsoil),
+      SWC = gap_fill_by_doy(Doy, SWC)
+    )
+
+  if (has_values(meteo_kursk$SWC)) {
+    swc_max <- suppressWarnings(max(meteo_kursk$SWC, na.rm = TRUE))
+    if (is.finite(swc_max) && swc_max <= 1.5) {
+      meteo_kursk$SWC <- meteo_kursk$SWC * 100
+    }
+  }
+
+  if (has_values(meteo_kursk$VPD)) {
+    meteo_kursk$VPD <- convert_vpd_to_pa(meteo_kursk$VPD)
+  }
+
+  par_min_cut <- 400
+  roll_window_days <- 7
+  roll_mean <- function(x) {
+    n <- length(x)
+    out <- rep(NA_real_, n)
+    for (i in seq_len(n)) {
+      start <- max(1, i - roll_window_days + 1)
+      out[i] <- mean(x[start:i], na.rm = TRUE)
+    }
+    out
+  }
+
+  meteo_kursk <- meteo_kursk %>%
+    mutate(
+      PAR_plot = ifelse(is.finite(PAR) & PAR >= par_min_cut, PAR, NA_real_),
+      PAR_roll = roll_mean(PAR_plot),
+      Tair_roll = roll_mean(Tair),
+      RH_roll = roll_mean(RH),
+      Tsoil_roll = roll_mean(Tsoil),
+      SWC_roll = roll_mean(SWC),
+      VPD_roll = roll_mean(VPD)
+    )
+
+  use_date_axis <- any(!is.na(meteo_kursk$Date))
+  x_var <- if (use_date_axis) "Date" else "Doy"
+  x_lab <- if (use_date_axis) "Дата" else "День года"
+  x_scale <- if (use_date_axis) {
+    scale_x_date(date_breaks = "2 weeks", date_labels = "%d.%m")
+  } else {
+    doy_min <- floor(min(meteo_kursk$Doy, na.rm = TRUE))
+    doy_max <- ceiling(max(meteo_kursk$Doy, na.rm = TRUE))
+    scale_x_continuous(
+      limits = c(doy_min, doy_max),
+      breaks = scales::pretty_breaks(n = 8)
+    )
+  }
+
+  if (has_values(meteo_kursk$PAR_plot)) {
+    p_par <- ggplot(filter(meteo_kursk, is.finite(PAR_plot)), aes(x = .data[[x_var]])) +
+      geom_point(aes(y = PAR_plot), color = "grey50", size = 0.35, alpha = 0.35) +
+      geom_line(aes(y = PAR_roll), color = "darkgreen", linewidth = 0.7, na.rm = TRUE) +
+      labs(
+        y = "ФАР, мкмоль м^-2 с^-1",
+        x = x_lab
+      ) +
+      x_scale +
+      theme_bw()
+    ggsave("Kursk_meteo_PAR.png", plot = p_par, width = 12, height = 4, dpi = 300)
+  }
+
+  if (has_values(meteo_kursk$Tair)) {
+    p_tair <- ggplot(meteo_kursk, aes(x = .data[[x_var]])) +
+      geom_point(aes(y = Tair, color = "Температура воздуха"), size = 0.35, alpha = 0.35) +
+      geom_line(aes(y = Tair_roll, color = "Температура воздуха"), linewidth = 0.7, na.rm = TRUE) +
+      scale_color_manual(name = "", values = c("Температура воздуха" = "#D55E00")) +
+      labs(y = "Температура воздуха, °C", x = x_lab) +
+      x_scale +
+      theme_bw() +
+      theme(legend.position = "top", legend.background = element_blank())
+    ggsave("Kursk_meteo_Tair.png", plot = p_tair, width = 12, height = 4, dpi = 300)
+  }
+
+  if (has_values(meteo_kursk$Tsoil)) {
+    p_tsoil <- ggplot(meteo_kursk, aes(x = .data[[x_var]])) +
+      geom_point(aes(y = Tsoil, color = "Температура почвы"), size = 0.35, alpha = 0.35) +
+      geom_line(aes(y = Tsoil_roll, color = "Температура почвы"), linewidth = 0.7, na.rm = TRUE) +
+      scale_color_manual(name = "", values = c("Температура почвы" = "#000000")) +
+      labs(y = "Температура почвы, °C", x = x_lab) +
+      x_scale +
+      theme_bw() +
+      theme(legend.position = "top", legend.background = element_blank())
+    ggsave("Kursk_meteo_Tsoil.png", plot = p_tsoil, width = 12, height = 4, dpi = 300)
+  }
+
+  if (has_values(meteo_kursk$SWC)) {
+    p_swc <- ggplot(meteo_kursk, aes(x = .data[[x_var]])) +
+      geom_point(aes(y = SWC), color = "grey50", size = 0.35, alpha = 0.35, na.rm = TRUE) +
+      geom_line(aes(y = SWC_roll), color = "#009E73", linewidth = 0.7, na.rm = TRUE) +
+      labs(y = "Влажность почвы, %", x = x_lab) +
+      x_scale +
+      theme_bw()
+    ggsave("Kursk_meteo_SWC.png", plot = p_swc, width = 12, height = 4, dpi = 300)
+  }
+
+  if (has_values(meteo_kursk$VPD)) {
+    p_vpd <- ggplot(meteo_kursk, aes(x = .data[[x_var]])) +
+      geom_point(aes(y = VPD), color = "grey50", size = 0.35, alpha = 0.35) +
+      geom_line(aes(y = VPD_roll), color = "#0072B2", linewidth = 0.7, na.rm = TRUE) +
+      labs(y = "Дефицит давления пара (VPD), Па", x = x_lab) +
+      x_scale +
+      theme_bw()
+    ggsave("Kursk_meteo_VPD.png", plot = p_vpd, width = 12, height = 4, dpi = 300)
+  }
+
+  if (has_values(meteo_kursk$Precip) && has_values(meteo_kursk$RH)) {
+    rh_max <- suppressWarnings(max(meteo_kursk$RH, na.rm = TRUE))
+    precip_max <- suppressWarnings(max(meteo_kursk$Precip, na.rm = TRUE))
+    rh_sf <- if (is.finite(rh_max) && rh_max > 0 && is.finite(precip_max) && precip_max > 0) {
+      precip_max / rh_max
+    } else {
+      1
+    }
+
+    p_rh_precip <- ggplot() +
+      geom_col(
+        data = meteo_kursk,
+        aes(x = .data[[x_var]], y = Precip, fill = "Осадки"),
+        width = 0.9,
+        alpha = 0.85
+      ) +
+      geom_point(
+        data = meteo_kursk,
+        aes(x = .data[[x_var]], y = RH * rh_sf, color = "Относительная влажность"),
+        size = 0.35,
+        alpha = 0.35
+      ) +
+      geom_line(
+        data = meteo_kursk,
+        aes(x = .data[[x_var]], y = RH_roll * rh_sf, color = "Относительная влажность"),
+        linewidth = 0.7,
+        na.rm = TRUE
+      ) +
+      scale_y_continuous(
+        name = "Осадки, мм/день",
+        sec.axis = sec_axis(~ . / rh_sf, name = "Относительная влажность, %")
+      ) +
+      scale_fill_manual(NULL, values = c("Осадки" = "#92C5DE")) +
+      scale_color_manual(NULL, values = c("Относительная влажность" = "grey30")) +
+      labs(x = x_lab) +
+      x_scale +
+      theme_bw() +
+      theme(legend.position = "bottom", legend.background = element_blank())
+
+    ggsave("Kursk_meteo_RH_Precip.png", plot = p_rh_precip, width = 12, height = 4, dpi = 300)
+  } else if (has_values(meteo_kursk$Precip)) {
+    p_precip <- ggplot(meteo_kursk, aes(x = .data[[x_var]])) +
+      geom_col(aes(y = Precip), fill = "#92C5DE", width = 0.9, alpha = 0.85) +
+      labs(y = "Осадки, мм/день", x = x_lab) +
+      x_scale +
+      theme_bw()
+    ggsave("Kursk_meteo_Precip.png", plot = p_precip, width = 12, height = 4, dpi = 300)
+  } else if (has_values(meteo_kursk$RH)) {
+    p_rh <- ggplot(meteo_kursk, aes(x = .data[[x_var]])) +
+      geom_point(aes(y = RH), color = "grey50", size = 0.35, alpha = 0.35) +
+      geom_line(aes(y = RH_roll), color = "grey30", linewidth = 0.7, na.rm = TRUE) +
+      labs(y = "Относительная влажность, %", x = x_lab) +
+      x_scale +
+      theme_bw()
+    ggsave("Kursk_meteo_RH.png", plot = p_rh, width = 12, height = 4, dpi = 300)
+  }
+} else {
+  cat("\n[meteo] Файл kurskfilled.csv не найден. Построение метеографиков пропущено.\n")
 }
