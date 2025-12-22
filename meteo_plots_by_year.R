@@ -14,13 +14,20 @@ suppressPackageStartupMessages({
 })
 
 # ----------------------- Константы фаз -----------------------
-# Курск 2013 (яровая пшеница)
+# Курск 2013 (яровая пшеница) - из kurskfilled.csv
+# DoY: seeds 115-117, germination 118-127, sprouting 128, tillering 136-156,
+#      leaf tube 157-164, milky 165-179, wax 180-195, complete 196-225, harvest 226-244
 B2013_Kursk <- list(
-  Sowing="2013-05-14", Emergence="2013-05-17", Tillering="2013-06-03",
-  StemElong="2013-06-27", Heading="2013-07-17", Flowering="2013-07-28",
-  Ripening="2013-08-03", Harvesting="2013-08-14"
+  Sowing="2013-04-25",      # DoY 115
+  Emergence="2013-04-28",   # DoY 118 (germination)
+  Tillering="2013-05-08",   # DoY 128 (sprouting -> tillering)
+  StemElong="2013-06-06",   # DoY 157 (leaf tube formation)
+  Heading="2013-06-14",     # DoY 165 (milky ripeness start)
+  Flowering="2013-06-29",   # DoY 180 (wax ripeness start)
+  Ripening="2013-07-15",    # DoY 196 (complete ripeness)
+  Harvesting="2013-08-14"   # DoY 226
 )
-# Москва 2013 (используем те же даты, если нужны другие - скажите)
+# Москва 2013 (яровая пшеница)
 B2013_Moscow <- list(
   Sowing="2013-05-14", Emergence="2013-05-17", Tillering="2013-06-03",
   StemElong="2013-06-27", Heading="2013-07-17", Flowering="2013-07-28",
