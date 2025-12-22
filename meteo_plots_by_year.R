@@ -148,7 +148,7 @@ load_biomet_2013 <- function(path) {
     SWC = swc,
     Precip = precip
   ) %>%
-    filter(!is.na(DateTime))
+    dplyr::filter(!is.na(DateTime))
 }
 
 # ----------------------- Загрузка данных 2016 (Москва) -----------------------
@@ -184,7 +184,7 @@ load_biomet_2016 <- function(flux_path, precip_path, swc_biomet_path = NULL) {
     SWC = NA_real_,
     Precip = NA_real_
   ) %>%
-    filter(!is.na(DateTime))
+    dplyr::filter(!is.na(DateTime))
 
   # Загрузка осадков (3-часовые данные -> дневные суммы)
   if (file.exists(precip_path)) {
@@ -200,7 +200,7 @@ load_biomet_2016 <- function(flux_path, precip_path, swc_biomet_path = NULL) {
         DateOnly = as.Date(DateTime),
         Precip_val = to_num(RRR)
       ) %>%
-      filter(!is.na(DateOnly)) %>%
+      dplyr::filter(!is.na(DateOnly)) %>%
       mutate(Precip_val = ifelse(is.na(Precip_val), 0, Precip_val)) %>%
       group_by(DateOnly) %>%
       summarise(Precip_daily = sum(Precip_val, na.rm = TRUE), .groups = "drop") %>%
@@ -254,7 +254,7 @@ load_biomet_2016 <- function(flux_path, precip_path, swc_biomet_path = NULL) {
         DateTime = swc_dt,
         SWC_ext = swc_mean
       ) %>%
-        filter(!is.na(DateTime))
+        dplyr::filter(!is.na(DateTime))
 
       cat(sprintf("    Диапазон SWC: %.1f%% - %.1f%%\n",
                   min(swc_data$SWC_ext, na.rm = TRUE),
@@ -308,7 +308,7 @@ load_biomet_2023_gapfilled <- function(path) {
     SWC = NA_real_,  # Нет данных влажности почвы в этом файле
     Precip = NA_real_  # Осадки не включены в gap-filled файл
   ) %>%
-    filter(!is.na(DateTime))
+    dplyr::filter(!is.na(DateTime))
 }
 
 # ----------------------- Загрузка данных 2023 из biomet файла -----------------------
@@ -362,7 +362,7 @@ load_biomet_2023 <- function(biomet_path, precip_path = NULL) {
     SWC = swc,
     Precip = precip
   ) %>%
-    filter(!is.na(DateTime))
+    dplyr::filter(!is.na(DateTime))
 }
 
 # Функция для объединения двух источников данных 2023
@@ -442,7 +442,7 @@ load_precip_2023 <- function(precip_path, year = 2023) {
 
   if (!is.null(precip_data)) {
     precip_data <- precip_data %>%
-      filter(!is.na(Date)) %>%
+      dplyr::filter(!is.na(Date)) %>%
       group_by(Date) %>%
       summarise(Precip_ext = sum(Precip_ext, na.rm = TRUE), .groups = "drop") %>%
       arrange(Date)
@@ -477,7 +477,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Москва",
   # Фильтруем сезон и применяем Savitzky-Golay фильтр
   biomet_season <- biomet %>%
     mutate(DateTime = as.POSIXct(DateTime, tz = "UTC")) %>%
-    filter(DateTime >= season_start & DateTime <= season_end) %>%
+    dplyr::filter(DateTime >= season_start & DateTime <= season_end) %>%
     arrange(DateTime) %>%
     mutate(
       PPFD_day = ifelse(is.finite(PPFD) & PPFD > ppfd_thresh, PPFD, NA_real_),
@@ -496,7 +496,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Москва",
 
   # Ежедневные осадки
   precip_daily <- biomet_season %>%
-    filter(is.finite(Precip)) %>%
+    dplyr::filter(is.finite(Precip)) %>%
     mutate(DateOnly = as.Date(DateTime)) %>%
     group_by(DateOnly) %>%
     summarise(Precip_day = sum_or_na(Precip), .groups = "drop") %>%
@@ -518,7 +518,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Москва",
 
   # 1. Температура воздуха
   if (sum(is.finite(biomet_season$Tair)) > 10) {
-    plots_list$Tair <- ggplot(biomet_season %>% filter(is.finite(Tair)),
+    plots_list$Tair <- ggplot(biomet_season %>% dplyr::filter(is.finite(Tair)),
                               aes(x = DateTime)) +
       geom_point(aes(y = Tair), color = "grey50", size = 0.35, alpha = 0.35) +
       geom_line(aes(y = Tair_sg), color = "#d62728", linewidth = 0.8, na.rm = TRUE) +
@@ -530,7 +530,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Москва",
 
   # 2. VPD
   if (sum(is.finite(biomet_season$VPD)) > 10) {
-    plots_list$VPD <- ggplot(biomet_season %>% filter(is.finite(VPD)),
+    plots_list$VPD <- ggplot(biomet_season %>% dplyr::filter(is.finite(VPD)),
                              aes(x = DateTime)) +
       geom_point(aes(y = VPD), color = "grey50", size = 0.35, alpha = 0.35) +
       geom_line(aes(y = VPD_sg), color = "#ff7f0e", linewidth = 0.8, na.rm = TRUE) +
@@ -541,7 +541,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Москва",
 
   # 3. PPFD
   if (sum(is.finite(biomet_season$PPFD_day)) > 10) {
-    plots_list$PPFD <- ggplot(biomet_season %>% filter(is.finite(PPFD_day)),
+    plots_list$PPFD <- ggplot(biomet_season %>% dplyr::filter(is.finite(PPFD_day)),
                               aes(x = DateTime)) +
       geom_point(aes(y = PPFD_day), color = "grey50", size = 0.35, alpha = 0.35) +
       geom_line(aes(y = PPFD_sg), color = "#9467bd", linewidth = 0.8, na.rm = TRUE) +
@@ -552,7 +552,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Москва",
 
   # 4. Температура почвы
   if (sum(is.finite(biomet_season$Tsoil)) > 10) {
-    plots_list$Tsoil <- ggplot(biomet_season %>% filter(is.finite(Tsoil)),
+    plots_list$Tsoil <- ggplot(biomet_season %>% dplyr::filter(is.finite(Tsoil)),
                                aes(x = DateTime)) +
       geom_point(aes(y = Tsoil), color = "grey50", size = 0.35, alpha = 0.35) +
       geom_line(aes(y = Tsoil_sg), color = "#8c564b", linewidth = 0.8, na.rm = TRUE) +
@@ -563,7 +563,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Москва",
 
   # 5. Влажность почвы
   if (sum(is.finite(biomet_season$SWC)) > 10) {
-    plots_list$SWC <- ggplot(biomet_season %>% filter(is.finite(SWC)),
+    plots_list$SWC <- ggplot(biomet_season %>% dplyr::filter(is.finite(SWC)),
                              aes(x = DateTime)) +
       geom_point(aes(y = SWC), color = "grey50", size = 0.35, alpha = 0.35) +
       geom_line(aes(y = SWC_sg), color = "#17becf", linewidth = 0.8, na.rm = TRUE) +
@@ -586,7 +586,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Москва",
       geom_col(data = precip_daily, aes(x = DateTime, y = Precip_day),
                fill = "#1f77b4", color = "#1f77b4", alpha = 0.6,
                width = 24 * 60 * 60 * 0.9) +
-      geom_point(data = biomet_season %>% filter(is.finite(RH)),
+      geom_point(data = biomet_season %>% dplyr::filter(is.finite(RH)),
                  aes(x = DateTime, y = RH * rh_sf),
                  color = "grey40", size = 0.35, alpha = 0.35) +
       geom_line(data = biomet_season,
@@ -605,7 +605,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Москва",
       time_scale +
       theme_meteo
   } else if (have_rh) {
-    plots_list$RH <- ggplot(biomet_season %>% filter(is.finite(RH)),
+    plots_list$RH <- ggplot(biomet_season %>% dplyr::filter(is.finite(RH)),
                             aes(x = DateTime)) +
       geom_point(aes(y = RH), color = "grey50", size = 0.35, alpha = 0.35) +
       geom_line(aes(y = RH_sg), color = "#2ca02c", linewidth = 0.8, na.rm = TRUE) +
