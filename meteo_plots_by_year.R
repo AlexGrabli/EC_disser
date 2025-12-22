@@ -91,7 +91,7 @@ roll_mean_index <- function(x, idx, days_window) {
 }
 
 # ----------------------- Загрузка данных Курск 2013 -----------------------
-load_biomet_kursk_2013 <- function(path) {
+load_biomet_kursk_2013 <- function(path, gapfill_path = NULL) {
   # Kursk_data_half_our.csv - CSV формат
   raw <- read_csv(path, show_col_types = FALSE)
   names(raw) <- trimws(names(raw))
@@ -122,7 +122,7 @@ load_biomet_kursk_2013 <- function(path) {
   # Осадки
   precip <- to_num(raw$P_Tot)
 
-  tibble(
+  biomet <- tibble(
     DateTime = dt,
     Date = as.Date(dt),
     Tair = tair,
@@ -134,6 +134,43 @@ load_biomet_kursk_2013 <- function(path) {
     Precip = precip
   ) %>%
     filter(!is.na(DateTime))
+
+  # Gap-filling из kurskfilled.csv (дневные данные)
+  if (!is.null(gapfill_path) && file.exists(gapfill_path)) {
+    cat("  Загружаем gap-filled данные из kurskfilled.csv...\n")
+    gf_raw <- read_csv(gapfill_path, show_col_types = FALSE)
+    names(gf_raw) <- trimws(names(gf_raw))
+
+    # kurskfilled.csv: Doy, date, SWC_1, Tsoil_f, PAR_Den_Avg, Tair_f, Rain_mm_Tot_sums
+    # date - Excel serial date number (40292 = 2013-04-25)
+    gf_data <- gf_raw %>%
+      mutate(
+        Date = as.Date(to_num(date), origin = "1899-12-30"),
+        Tair_gf = to_num(Tair_f),
+        Tsoil_gf = to_num(Tsoil_f),
+        PPFD_gf = to_num(PAR_Den_Avg),
+        SWC_gf = to_num(SWC_1) * 100,  # m³/m³ -> %
+        Precip_gf = to_num(Rain_mm_Tot_sums)
+      ) %>%
+      select(Date, Tair_gf, Tsoil_gf, PPFD_gf, SWC_gf, Precip_gf) %>%
+      filter(!is.na(Date))
+
+    cat(sprintf("    Загружено %d дней gap-filled данных\n", nrow(gf_data)))
+
+    # Присоединяем gap-filled данные по дате
+    biomet <- biomet %>%
+      left_join(gf_data, by = "Date") %>%
+      mutate(
+        Tair = coalesce(Tair, Tair_gf),
+        Tsoil = coalesce(Tsoil, Tsoil_gf),
+        PPFD = coalesce(PPFD, PPFD_gf),
+        SWC = coalesce(SWC, SWC_gf),
+        Precip = coalesce(Precip, Precip_gf)
+      ) %>%
+      select(-ends_with("_gf"))
+  }
+
+  biomet
 }
 
 # ----------------------- Загрузка данных Москва 2013 -----------------------
@@ -227,25 +264,33 @@ load_biomet_2016 <- function(flux_path, precip_path, swc_biomet_path = NULL) {
   ) %>%
     filter(!is.na(DateTime))
 
-  # Загрузка осадков
+  # Загрузка осадков (3-часовые данные -> дневные суммы)
   if (file.exists(precip_path)) {
+    cat("  Загружаем осадки из 2016_precip.csv...\n")
     precip_raw <- read_delim(precip_path, delim = ";", show_col_types = FALSE,
                              col_types = cols(.default = col_character()))
     names(precip_raw) <- trimws(names(precip_raw))
 
+    # Парсим даты и суммируем осадки по дням
     precip_data <- precip_raw %>%
-      transmute(
+      mutate(
         DateTime = parse_dt_guess(Date),
-        Precip_ext = to_num(RRR)
+        DateOnly = as.Date(DateTime),
+        Precip_val = to_num(RRR)
       ) %>%
-      filter(!is.na(DateTime)) %>%
-      mutate(Precip_ext = ifelse(is.na(Precip_ext), 0, Precip_ext))
+      filter(!is.na(DateOnly)) %>%
+      mutate(Precip_val = ifelse(is.na(Precip_val), 0, Precip_val)) %>%
+      group_by(DateOnly) %>%
+      summarise(Precip_daily = sum(Precip_val, na.rm = TRUE), .groups = "drop") %>%
+      rename(Date = DateOnly)
 
-    # Присоединяем осадки (они 3-часовые, нужно подогнать к получасовым данным)
+    cat(sprintf("    Найдено %d дней с осадками\n", sum(precip_data$Precip_daily > 0)))
+
+    # Присоединяем дневные осадки к основным данным по дате
     biomet <- biomet %>%
-      left_join(precip_data, by = "DateTime") %>%
-      mutate(Precip = coalesce(Precip_ext, Precip)) %>%
-      select(-Precip_ext)
+      left_join(precip_data, by = "Date") %>%
+      mutate(Precip = coalesce(Precip_daily, Precip)) %>%
+      select(-Precip_daily)
   }
 
   # Загрузка влажности почвы из 2016BiomB.csv
@@ -662,6 +707,7 @@ cat("\n=== Построение графиков метеоусловий по �
 # Пути к файлам
 # Курск 2013
 kursk_2013_path <- "Kursk_data_half_our.csv"
+kursk_gapfill_path <- "kurskfilled.csv"
 # Москва 2013
 moscow_2013_path <- "biomet2013.csv"
 # Москва 2016
@@ -675,7 +721,7 @@ precip_2023_path <- "Осадки.csv"
 
 # Загрузка данных Курск 2013
 cat("Загрузка данных 2013 (Курск)...\n")
-biomet_kursk_2013 <- load_biomet_kursk_2013(kursk_2013_path)
+biomet_kursk_2013 <- load_biomet_kursk_2013(kursk_2013_path, kursk_gapfill_path)
 cat(sprintf("  Загружено %d записей, диапазон: %s - %s\n",
             nrow(biomet_kursk_2013),
             min(biomet_kursk_2013$Date, na.rm = TRUE),
