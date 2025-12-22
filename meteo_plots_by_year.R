@@ -481,10 +481,10 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Москва",
       PPFD_day = ifelse(is.finite(PPFD) & PPFD > ppfd_thresh, PPFD, NA_real_),
       Tair_sg = sg_smooth(Tair, p = sg_order, n = sg_window),
       RH_sg = sg_smooth(RH, p = sg_order, n = sg_window),
-      VPD_sg = sg_smooth(VPD, p = sg_order, n = sg_window),
-      PPFD_sg = sg_smooth(PPFD_day, p = sg_order, n = sg_window),
+      VPD_sg = pmax(0, sg_smooth(VPD, p = sg_order, n = sg_window)),
+      PPFD_sg = pmax(0, sg_smooth(PPFD_day, p = sg_order, n = sg_window)),
       Tsoil_sg = sg_smooth(Tsoil, p = sg_order, n = sg_window),
-      SWC_sg = sg_smooth(SWC, p = sg_order, n = sg_window)
+      SWC_sg = pmax(0, sg_smooth(SWC, p = sg_order, n = sg_window))
     )
 
   if (nrow(biomet_season) == 0) {
