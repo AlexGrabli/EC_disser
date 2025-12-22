@@ -189,24 +189,22 @@ load_biomet_2016 <- function(flux_path, precip_path, swc_biomet_path = NULL) {
   # Загрузка осадков (3-часовые данные -> дневные суммы)
   if (file.exists(precip_path)) {
     cat("  Загружаем осадки из 2016_precip.csv...\n")
-    precip_raw <- read_delim(precip_path, delim = ";", show_col_types = FALSE,
-                             col_types = cols(.default = col_character()))
-    names(precip_raw) <- trimws(names(precip_raw))
 
-    # Парсим даты и суммируем осадки по дням
-    precip_data <- precip_raw %>%
-      mutate(
-        DateTime = parse_dt_guess(Date),
-        DateOnly = as.Date(DateTime),
-        Precip_val = to_num(RRR)
-      ) %>%
-      dplyr::filter(!is.na(DateOnly)) %>%
-      mutate(Precip_val = ifelse(is.na(Precip_val), 0, Precip_val)) %>%
-      group_by(DateOnly) %>%
-      summarise(Precip_daily = sum(Precip_val, na.rm = TRUE), .groups = "drop") %>%
-      rename(Date = DateOnly)
+    # Используем read.csv как в рабочем скрипте
+    df_precip <- read.csv(precip_path, sep = ";", dec = ".")
 
-    cat(sprintf("    Найдено %d дней с осадками\n", sum(precip_data$Precip_daily > 0)))
+    # Парсим дату формата "31.08.2016 21:00" через dmy_hm
+    df_precip$Date_parsed <- dmy_hm(df_precip$Date)
+    df_precip$Day <- as.Date(df_precip$Date_parsed)
+
+    # Группируем по дням и суммируем RRR
+    precip_data <- df_precip %>%
+      group_by(Day) %>%
+      summarise(Precip_daily = sum(RRR, na.rm = TRUE), .groups = "drop") %>%
+      dplyr::filter(!is.na(Day)) %>%
+      rename(Date = Day)
+
+    cat(sprintf("    Найдено %d дней с осадками\n", sum(precip_data$Precip_daily > 0, na.rm = TRUE)))
 
     # Присоединяем дневные осадки к основным данным по дате
     biomet <- biomet %>%
