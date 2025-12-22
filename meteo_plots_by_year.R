@@ -1,6 +1,6 @@
 # ======================================================================
 # Построение графиков метеоусловий по годам
-# 2013 - Курск, 2016 и 2023 - Москва
+# Курск 2013, Москва 2013, Москва 2016, Москва 2023
 # Референс: 6-панельный график с температурой воздуха, VPD, PPFD,
 #           температурой почвы, влажностью почвы, осадками/влажностью
 # ======================================================================
@@ -14,7 +14,14 @@ suppressPackageStartupMessages({
 })
 
 # ----------------------- Константы фаз -----------------------
-B2013 <- list(
+# Курск 2013 (яровая пшеница)
+B2013_Kursk <- list(
+  Sowing="2013-05-14", Emergence="2013-05-17", Tillering="2013-06-03",
+  StemElong="2013-06-27", Heading="2013-07-17", Flowering="2013-07-28",
+  Ripening="2013-08-03", Harvesting="2013-08-14"
+)
+# Москва 2013 (используем те же даты, если нужны другие - скажите)
+B2013_Moscow <- list(
   Sowing="2013-05-14", Emergence="2013-05-17", Tillering="2013-06-03",
   StemElong="2013-06-27", Heading="2013-07-17", Flowering="2013-07-28",
   Ripening="2013-08-03", Harvesting="2013-08-14"
@@ -76,8 +83,55 @@ roll_mean_index <- function(x, idx, days_window) {
   )
 }
 
-# ----------------------- Загрузка данных 2013 (Курск) -----------------------
-load_biomet_2013 <- function(path) {
+# ----------------------- Загрузка данных Курск 2013 -----------------------
+load_biomet_kursk_2013 <- function(path) {
+  # Kursk_data_half_our.csv - CSV формат
+  raw <- read_csv(path, show_col_types = FALSE)
+  names(raw) <- trimws(names(raw))
+
+  # Парсим дату
+  dt <- parse_dt_guess(raw$DateTime)
+
+  # Извлекаем переменные
+  tair <- to_num(raw$Ta_Avg)
+  rh <- to_num(raw$RH_Avg)
+
+  # VPD вычисляем из температуры и RH
+  vpd <- calc_vpd_kpa(tair, rh)
+
+  ppfd <- to_num(raw$PAR_Den_Avg)
+
+  # Температура почвы
+  tsoil <- to_num(raw$Tsoil)
+
+  # Влажность почвы - среднее по глубинам (m³/m³ -> %)
+  swc_10 <- to_num(raw$SWC_avg_10cm_Avg)
+  swc_20 <- to_num(raw$SWC_avg_20cm_Avg)
+  swc_50 <- to_num(raw$SWC_avg_50cm_Avg)
+  swc_mat <- cbind(swc_10, swc_20, swc_50)
+  swc <- rowMeans(swc_mat, na.rm = TRUE) * 100  # Переводим m³/m³ в %
+  swc[!is.finite(swc)] <- NA_real_
+
+  # Осадки
+  precip <- to_num(raw$P_Tot)
+
+  tibble(
+    DateTime = dt,
+    Date = as.Date(dt),
+    Tair = tair,
+    RH = rh,
+    VPD = vpd,
+    PPFD = ppfd,
+    Tsoil = tsoil,
+    SWC = swc,
+    Precip = precip
+  ) %>%
+    filter(!is.na(DateTime))
+}
+
+# ----------------------- Загрузка данных Москва 2013 -----------------------
+load_biomet_moscow_2013 <- function(path) {
+  # biomet2013.csv - точка с запятой разделитель
   raw <- read_delim(path, delim = ";", show_col_types = FALSE)
   names(raw) <- trimws(names(raw))
 
@@ -104,11 +158,11 @@ load_biomet_2013 <- function(path) {
     tsoil <- NA_real_
   }
 
-  # Влажность почвы - среднее по датчикам
+  # Влажность почвы - среднее по датчикам (m³/m³ -> %)
   swc_cols <- grep("VWC_\\d+_Avg", names(raw), value = TRUE)
   if (length(swc_cols) > 0) {
     swc_mat <- sapply(swc_cols, function(c) to_num(raw[[c]]))
-    swc <- rowMeans(swc_mat, na.rm = TRUE)
+    swc <- rowMeans(swc_mat, na.rm = TRUE) * 100  # Переводим m³/m³ в %
     swc[!is.finite(swc)] <- NA_real_
   } else {
     swc <- NA_real_
@@ -358,16 +412,93 @@ merge_biomet_2023 <- function(gapfilled, biomet) {
     arrange(DateTime)
 }
 
+# ----------------------- Загрузка осадков из Осадки.csv для 2023 -----------------------
+load_precip_2023 <- function(precip_path, year = 2023) {
+  if (!file.exists(precip_path)) return(NULL)
+
+  # Файл в кодировке cp1251, столбцы: Число, Апр, Май, Июн, Июл, Авг, Сен
+  raw <- read_delim(precip_path, delim = ";", skip = 1, show_col_types = FALSE,
+                    locale = locale(encoding = "cp1251"))
+  names(raw) <- trimws(names(raw))
+
+  # Первый столбец - день месяца
+  day_col <- names(raw)[1]
+  month_cols <- names(raw)[-1]
+
+  # Сопоставляем русские названия месяцев с номерами
+  month_map <- c("Янв" = 1, "Фев" = 2, "Мар" = 3, "Апр" = 4, "Май" = 5, "Июн" = 6,
+                 "Июл" = 7, "Авг" = 8, "Сен" = 9, "Окт" = 10, "Ноя" = 11, "Дек" = 12)
+
+  precip_data <- NULL
+
+  for (mcol in month_cols) {
+    # Определяем номер месяца
+    month_num <- NA
+    for (mname in names(month_map)) {
+      if (grepl(mname, mcol, ignore.case = TRUE)) {
+        month_num <- month_map[[mname]]
+        break
+      }
+    }
+    if (is.na(month_num)) next
+
+    # Извлекаем данные
+    days <- to_num(raw[[day_col]])
+    precip_vals <- raw[[mcol]]
+    # "-" = 0, пустая строка = 0
+    precip_vals <- ifelse(precip_vals == "-" | is.na(precip_vals) | precip_vals == "", "0", precip_vals)
+    precip_vals <- to_num(precip_vals)
+    precip_vals[is.na(precip_vals)] <- 0
+
+    # Создаем даты
+    valid_days <- !is.na(days) & days >= 1 & days <= 31
+    dates <- as.Date(paste(year, month_num, days[valid_days], sep = "-"))
+
+    month_data <- tibble(
+      Date = dates,
+      Precip_ext = precip_vals[valid_days]
+    )
+
+    if (is.null(precip_data)) {
+      precip_data <- month_data
+    } else {
+      precip_data <- bind_rows(precip_data, month_data)
+    }
+  }
+
+  if (!is.null(precip_data)) {
+    precip_data <- precip_data %>%
+      filter(!is.na(Date)) %>%
+      group_by(Date) %>%
+      summarise(Precip_ext = sum(Precip_ext, na.rm = TRUE), .groups = "drop") %>%
+      arrange(Date)
+  }
+
+  precip_data
+}
+
 # ----------------------- Функция построения графиков -----------------------
 create_meteo_plot <- function(biomet, year, bounds, location = "Курск",
-                              roll_window_days = 7, ppfd_thresh = 10) {
+                              roll_window_days = 7, ppfd_thresh = 10,
+                              use_data_start = FALSE) {
   if (is.null(biomet) || nrow(biomet) == 0) {
     cat(sprintf("  !! Нет данных биомета для %d\n", year))
     return(NULL)
   }
 
-  season_start <- as.POSIXct(as.Date(bounds$Sowing), tz = "UTC")
   season_end <- as.POSIXct(as.Date(bounds$Harvesting) + 1, tz = "UTC")
+
+  # Определяем начало сезона
+  if (use_data_start) {
+    # Используем начало доступных данных вместо даты посева
+    data_start <- min(biomet$DateTime, na.rm = TRUE)
+    sowing_date <- as.POSIXct(as.Date(bounds$Sowing), tz = "UTC")
+    season_start <- max(data_start, sowing_date)
+    cat(sprintf("  Начало данных: %s, начало сезона: %s\n",
+                format(data_start, "%Y-%m-%d"), format(season_start, "%Y-%m-%d")))
+  } else {
+    season_start <- as.POSIXct(as.Date(bounds$Sowing), tz = "UTC")
+  }
 
   # Фильтруем сезон и добавляем скользящие средние
   biomet_season <- biomet %>%
@@ -522,21 +653,34 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Курск",
 cat("\n=== Построение графиков метеоусловий по годам ===\n\n")
 
 # Пути к файлам
-biomet_2013_path <- "biomet2013.csv"
+# Курск 2013
+kursk_2013_path <- "Kursk_data_half_our.csv"
+# Москва 2013
+moscow_2013_path <- "biomet2013.csv"
+# Москва 2016
 biomet_2016_path <- "Moscow_2016_verFin.csv"
 precip_2016_path <- "2016_precip.csv"
-swc_2016_path <- "2016BiomB.csv"  # Файл с влажностью почвы для 2016
+swc_2016_path <- "2016BiomB.csv"
+# Москва 2023
 gapfilled_2023_path <- "ИТОГ2_BarleyFilledAllScen_65p_biom_thrash_new2505.csv"
 biomet_2023_path <- "Anal11_biomet.csv"
 precip_2023_path <- "Осадки.csv"
 
-# Загрузка данных
+# Загрузка данных Курск 2013
 cat("Загрузка данных 2013 (Курск)...\n")
-biomet_2013 <- load_biomet_2013(biomet_2013_path)
+biomet_kursk_2013 <- load_biomet_kursk_2013(kursk_2013_path)
 cat(sprintf("  Загружено %d записей, диапазон: %s - %s\n",
-            nrow(biomet_2013),
-            min(biomet_2013$Date, na.rm = TRUE),
-            max(biomet_2013$Date, na.rm = TRUE)))
+            nrow(biomet_kursk_2013),
+            min(biomet_kursk_2013$Date, na.rm = TRUE),
+            max(biomet_kursk_2013$Date, na.rm = TRUE)))
+
+# Загрузка данных Москва 2013
+cat("\nЗагрузка данных 2013 (Москва)...\n")
+biomet_moscow_2013 <- load_biomet_moscow_2013(moscow_2013_path)
+cat(sprintf("  Загружено %d записей, диапазон: %s - %s\n",
+            nrow(biomet_moscow_2013),
+            min(biomet_moscow_2013$Date, na.rm = TRUE),
+            max(biomet_moscow_2013$Date, na.rm = TRUE)))
 
 cat("\nЗагрузка данных 2016 (Москва)...\n")
 biomet_2016 <- load_biomet_2016(biomet_2016_path, precip_2016_path, swc_2016_path)
@@ -573,15 +717,37 @@ cat(sprintf("  Итого объединено %d записей, диапазо
             min(biomet_2023$Date, na.rm = TRUE),
             max(biomet_2023$Date, na.rm = TRUE)))
 
+# Загружаем осадки из отдельного файла Осадки.csv
+if (file.exists(precip_2023_path)) {
+  cat("  Загружаем осадки из Осадки.csv...\n")
+  precip_2023 <- load_precip_2023(precip_2023_path, year = 2023)
+  if (!is.null(precip_2023) && nrow(precip_2023) > 0) {
+    cat(sprintf("    Загружено %d дней осадков\n", nrow(precip_2023)))
+    # Добавляем осадки к основным данным (по дате)
+    biomet_2023 <- biomet_2023 %>%
+      left_join(precip_2023, by = "Date") %>%
+      mutate(Precip = coalesce(Precip_ext, Precip)) %>%
+      select(-Precip_ext)
+  }
+}
+
 # Построение и сохранение графиков
 cat("\n=== Построение графиков ===\n")
 
 cat("\n2013 (Курск)...\n")
-p2013 <- create_meteo_plot(biomet_2013, 2013, B2013, location = "Курск")
-if (!is.null(p2013)) {
-  ggsave("Meteo_dynamics_2013_Kursk_ru.png", p2013,
+p_kursk_2013 <- create_meteo_plot(biomet_kursk_2013, 2013, B2013_Kursk, location = "Курск")
+if (!is.null(p_kursk_2013)) {
+  ggsave("Meteo_dynamics_2013_Kursk_ru.png", p_kursk_2013,
          width = 14, height = 10, dpi = 300, bg = "white")
   cat("  -> Сохранено: Meteo_dynamics_2013_Kursk_ru.png\n")
+}
+
+cat("\n2013 (Москва)...\n")
+p_moscow_2013 <- create_meteo_plot(biomet_moscow_2013, 2013, B2013_Moscow, location = "Москва")
+if (!is.null(p_moscow_2013)) {
+  ggsave("Meteo_dynamics_2013_Moscow_ru.png", p_moscow_2013,
+         width = 14, height = 10, dpi = 300, bg = "white")
+  cat("  -> Сохранено: Meteo_dynamics_2013_Moscow_ru.png\n")
 }
 
 cat("\n2016 (Москва)...\n")
@@ -593,7 +759,7 @@ if (!is.null(p2016)) {
 }
 
 cat("\n2023 (Москва)...\n")
-p2023 <- create_meteo_plot(biomet_2023, 2023, B2023, location = "Москва")
+p2023 <- create_meteo_plot(biomet_2023, 2023, B2023, location = "Москва", use_data_start = TRUE)
 if (!is.null(p2023)) {
   ggsave("Meteo_dynamics_2023_Moscow_ru.png", p2023,
          width = 14, height = 10, dpi = 300, bg = "white")
