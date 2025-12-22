@@ -2147,19 +2147,43 @@ if (file.exists(meteo_file_kursk)) {
     }
   }
 
-  if (has_values(meteo_kursk$VPD)) {
-    meteo_kursk$VPD <- convert_vpd_to_kpa(meteo_kursk$VPD)
+  # Calculate VPD from Tair and RH using Tetens formula
+  calc_vpd <- function(temp, rh) {
+    # Saturation vapor pressure (es) in kPa - Tetens formula
+    es <- 0.6108 * exp(17.27 * temp / (temp + 237.3))
+    # Actual vapor pressure (ea) in kPa
+    ea <- es * (rh / 100)
+    # VPD in kPa
+    vpd <- es - ea
+    return(vpd)
   }
 
-  roll_window_days <- 7
-  roll_mean <- function(x) {
-    n <- length(x)
-    out <- rep(NA_real_, n)
-    for (i in seq_len(n)) {
-      start <- max(1, i - roll_window_days + 1)
-      out[i] <- mean(x[start:i], na.rm = TRUE)
-    }
-    out
+  # Recalculate VPD from Tair and RH
+  if (has_values(meteo_kursk$Tair) && has_values(meteo_kursk$RH)) {
+    meteo_kursk$VPD <- calc_vpd(meteo_kursk$Tair, meteo_kursk$RH)
+    cat("\n[meteo] VPD recalculated from Tair and RH using Tetens formula\n")
+  }
+
+  # Savitzky-Golay filter function
+  sg_filter <- function(x, window = 11, order = 3) {
+    # Remove NA values for filtering
+    x_clean <- x[is.finite(x)]
+    if (length(x_clean) < window) return(x)
+
+    # Apply Savitzky-Golay filter using signal package
+    # If signal package not available, fall back to simple smoothing
+    tryCatch({
+      require(signal, quietly = TRUE)
+      x_filtered <- rep(NA_real_, length(x))
+      valid_idx <- which(is.finite(x))
+      if (length(valid_idx) >= window) {
+        x_filtered[valid_idx] <- signal::sgolayfilt(x[valid_idx], p = order, n = window)
+      }
+      x_filtered
+    }, error = function(e) {
+      # Fallback to moving average if signal package not available
+      zoo::rollmean(x, k = window, fill = NA, na.rm = TRUE)
+    })
   }
 
   # Filter by vegetation period (DoY 115-226 for Kursk 2013)
@@ -2169,12 +2193,12 @@ if (file.exists(meteo_file_kursk)) {
   meteo_kursk_veg <- meteo_kursk %>%
     filter(Doy >= veg_start & Doy <= veg_end) %>%
     mutate(
-      PAR_roll = roll_mean(PAR),
-      Tair_roll = roll_mean(Tair),
-      RH_roll = roll_mean(RH),
-      Tsoil_roll = roll_mean(Tsoil),
-      SWC_roll = roll_mean(SWC),
-      VPD_roll = roll_mean(VPD)
+      PAR_smooth = sg_filter(PAR, window = 11, order = 3),
+      Tair_smooth = sg_filter(Tair, window = 11, order = 3),
+      RH_smooth = sg_filter(RH, window = 11, order = 3),
+      Tsoil_smooth = sg_filter(Tsoil, window = 11, order = 3),
+      SWC_smooth = sg_filter(SWC, window = 11, order = 3),
+      VPD_smooth = sg_filter(VPD, window = 11, order = 3)
     )
 
   # Setup x-axis scale with dates
@@ -2192,7 +2216,7 @@ if (file.exists(meteo_file_kursk)) {
   # 1. Temperature (Tair)
   p_tair <- ggplot(meteo_kursk_veg, aes(x = Date)) +
     geom_point(aes(y = Tair), color = "grey50", size = 1, alpha = 0.5) +
-    geom_line(aes(y = Tair_roll), color = "#D55E00", linewidth = 0.8, na.rm = TRUE) +
+    geom_line(aes(y = Tair_smooth), color = "#D55E00", linewidth = 0.8, na.rm = TRUE) +
     labs(y = expression("Температура воздуха ("*degree*C*")")) +
     x_scale +
     plot_theme
@@ -2200,7 +2224,7 @@ if (file.exists(meteo_file_kursk)) {
   # 2. VPD (in kPa)
   p_vpd <- ggplot(meteo_kursk_veg, aes(x = Date)) +
     geom_point(aes(y = VPD), color = "grey50", size = 1, alpha = 0.5) +
-    geom_line(aes(y = VPD_roll), color = "orange", linewidth = 0.8, na.rm = TRUE) +
+    geom_line(aes(y = VPD_smooth), color = "orange", linewidth = 0.8, na.rm = TRUE) +
     labs(y = "VPD (кПа)") +
     x_scale +
     plot_theme
@@ -2208,7 +2232,7 @@ if (file.exists(meteo_file_kursk)) {
   # 3. PPFD
   p_ppfd <- ggplot(meteo_kursk_veg, aes(x = Date)) +
     geom_point(aes(y = PAR), color = "grey50", size = 1, alpha = 0.5) +
-    geom_line(aes(y = PAR_roll), color = "purple", linewidth = 0.8, na.rm = TRUE) +
+    geom_line(aes(y = PAR_smooth), color = "purple", linewidth = 0.8, na.rm = TRUE) +
     labs(y = expression("PPFD (мкмоль м"^-2~"с"^-1*")")) +
     x_scale +
     plot_theme
@@ -2216,7 +2240,7 @@ if (file.exists(meteo_file_kursk)) {
   # 4. Soil Temperature
   p_tsoil <- ggplot(meteo_kursk_veg, aes(x = Date)) +
     geom_point(aes(y = Tsoil), color = "grey50", size = 1, alpha = 0.5) +
-    geom_line(aes(y = Tsoil_roll), color = "brown", linewidth = 0.8, na.rm = TRUE) +
+    geom_line(aes(y = Tsoil_smooth), color = "brown", linewidth = 0.8, na.rm = TRUE) +
     labs(y = expression("Температура почвы ("*degree*C*")")) +
     x_scale +
     plot_theme
@@ -2224,14 +2248,14 @@ if (file.exists(meteo_file_kursk)) {
   # 5. Soil Water Content
   p_swc <- ggplot(meteo_kursk_veg, aes(x = Date)) +
     geom_point(aes(y = SWC), color = "grey50", size = 1, alpha = 0.5, na.rm = TRUE) +
-    geom_line(aes(y = SWC_roll), color = "cyan", linewidth = 0.8, na.rm = TRUE) +
+    geom_line(aes(y = SWC_smooth), color = "cyan", linewidth = 0.8, na.rm = TRUE) +
     labs(y = "Влажность почвы (%)") +
     x_scale +
     plot_theme
 
   # 6. Precipitation with SWC on secondary axis
   # Scale precipitation for dual axis
-  swc_max <- suppressWarnings(max(meteo_kursk_veg$SWC_roll, na.rm = TRUE))
+  swc_max <- suppressWarnings(max(meteo_kursk_veg$SWC_smooth, na.rm = TRUE))
   precip_max <- suppressWarnings(max(meteo_kursk_veg$Precip, na.rm = TRUE))
   scale_factor <- if (is.finite(swc_max) && is.finite(precip_max) && precip_max > 0) {
     swc_max / precip_max * 0.8
@@ -2242,7 +2266,7 @@ if (file.exists(meteo_file_kursk)) {
   p_precip <- ggplot(meteo_kursk_veg, aes(x = Date)) +
     geom_col(aes(y = Precip * scale_factor), fill = "steelblue", alpha = 0.7, width = 1) +
     geom_point(aes(y = SWC), color = "grey50", size = 1, alpha = 0.5, na.rm = TRUE) +
-    geom_line(aes(y = SWC_roll), color = "black", linewidth = 0.8, na.rm = TRUE) +
+    geom_line(aes(y = SWC_smooth), color = "black", linewidth = 0.8, na.rm = TRUE) +
     scale_y_continuous(
       name = "Осадки (мм)",
       sec.axis = sec_axis(~ ., name = "Влажность почвы (%)")
