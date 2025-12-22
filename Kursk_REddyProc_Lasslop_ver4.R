@@ -211,9 +211,10 @@ Results <- EProc$sExportResults()
 # Add DateTime back
 Results$DateTime <- kursk_data$DateTime[1:nrow(Results)]
 
-# Add Tsoil and Hour from original data (not included in REddyProc output)
+# Add Tsoil, Hour, and Precipitation from original data (not included in REddyProc output)
 Results$Tsoil <- EddyData$Tsoil[1:nrow(Results)]
 Results$Hour <- EddyData$Hour[1:nrow(Results)]
+Results$Precip <- as.numeric(kursk_data$P_Tot[1:nrow(Results)])
 
 # Add DoY and assign phenophases
 Results$DoY <- yday(Results$DateTime)
@@ -274,6 +275,8 @@ Daily <- Results %>%
     Reco_sum = sum(Reco_DT, na.rm = TRUE) * 12 * 1800 / 10^6,
     # Evapotranspiration (from LE, W m-2 to mm d-1)
     ET = sum(LE_f, na.rm = TRUE) * 1800 / (2.45 * 10^6),
+    # Precipitation sum (mm d-1)
+    Precip_sum = sum(Precip, na.rm = TRUE),
     # Environmental means
     Tair_mean = mean(Tair_f, na.rm = TRUE),
     VPD_mean = mean(VPD_f, na.rm = TRUE),
@@ -794,7 +797,7 @@ write.csv(Daily, "output_Kursk/Kursk_REddyProc_daily.csv", row.names = FALSE)
 write.csv(coef_tbl, "output_Kursk/Kursk_light_curve_coefficients.csv", row.names = FALSE)
 
 # Create kurskfilled.csv with gap-filled meteorological data
-# This file contains daily aggregations with filled RH, VPD, Tsoil, and SWC
+# This file contains daily aggregations with filled RH, VPD, Tsoil, SWC, and Precipitation
 kurskfilled <- Daily %>%
   select(
     Doy = DoY,
@@ -807,13 +810,14 @@ kurskfilled <- Daily %>%
     PAR_f = PPFD_mean,
     Tair_f = Tair_mean,
     VPD_f = VPD_mean,
-    rH_f = rH_mean
+    rH_f = rH_mean,
+    Rain_mm_Tot_sums = Precip_sum
   )
 
 # Save kurskfilled.csv
 write.csv(kurskfilled, "kurskfilled.csv", row.names = FALSE)
 cat("\nGap-filled meteorological data saved to: kurskfilled.csv\n")
-cat("Columns included: Doy, Date, NEE_f_sums, Reco, GPP, SWC_f, Tsoil_f, PAR_f, Tair_f, VPD_f, rH_f\n")
+cat("Columns included: Doy, Date, NEE_f_sums, Reco, GPP, SWC_f, Tsoil_f, PAR_f, Tair_f, VPD_f, rH_f, Rain_mm_Tot_sums\n")
 
 # Display all plots
 print(plot_diurnal_NEE)
