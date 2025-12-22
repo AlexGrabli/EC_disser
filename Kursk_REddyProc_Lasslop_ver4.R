@@ -102,9 +102,11 @@ EddyData <- kursk_data %>%
     # Relative humidity in %
     rH = as.numeric(rH),
     # Soil temperature in deg C
-    Tsoil = as.numeric(Tsoil)
+    Tsoil = as.numeric(Tsoil),
+    # Soil water content in m3 m-3
+    SWC = as.numeric(SWC_1)
   ) %>%
-  select(DateTime, Year, DoY, Hour, NEE, LE, H, Ustar, Tair, Rg, VPD, rH, Tsoil) %>%
+  select(DateTime, Year, DoY, Hour, NEE, LE, H, Ustar, Tair, Rg, VPD, rH, Tsoil, SWC) %>%
   as.data.frame()
 
 # Replace -9999 and other missing value indicators with NA
@@ -156,7 +158,7 @@ cat("Date range:", min(kursk_data$DateTime, na.rm = TRUE), "to",
 EProc <- sEddyProc$new(
   "Kursk",           # Site ID
   EddyData,          # Data frame
-  c("NEE", "LE", "H", "Rg", "Tair", "VPD", "Ustar", "rH", "Tsoil")  # Variables
+  c("NEE", "LE", "H", "Rg", "Tair", "VPD", "Ustar", "rH", "Tsoil", "SWC")  # Variables
 )
 
 # Set location info for solar time calculation
@@ -187,6 +189,9 @@ EProc$sMDSGapFill("H", FillAll = TRUE)
 EProc$sMDSGapFill("Tair", FillAll = FALSE)
 EProc$sMDSGapFill("VPD", FillAll = FALSE)
 EProc$sMDSGapFill("Rg", FillAll = FALSE)
+EProc$sMDSGapFill("rH", FillAll = FALSE)
+EProc$sMDSGapFill("Tsoil", FillAll = FALSE)
+EProc$sMDSGapFill("SWC", FillAll = FALSE)
 
 cat("\nGap-filling completed\n")
 
@@ -273,7 +278,9 @@ Daily <- Results %>%
     Tair_mean = mean(Tair_f, na.rm = TRUE),
     VPD_mean = mean(VPD_f, na.rm = TRUE),
     Rg_mean = mean(Rg_f, na.rm = TRUE),
-    Tsoil_mean = mean(Tsoil, na.rm = TRUE),
+    Tsoil_mean = mean(Tsoil_f, na.rm = TRUE),
+    rH_mean = mean(rH_f, na.rm = TRUE),
+    SWC_mean = mean(SWC_f, na.rm = TRUE),
     PPFD_mean = mean(PPFD, na.rm = TRUE),
     # WUE metrics
     WUE_mean = mean(WUE_inst, na.rm = TRUE),
@@ -785,6 +792,28 @@ plot_Reco_temp <- ggplot(Results %>% filter(!is.na(Reco_DT) & Reco_DT > 0),
 # Save daily aggregated data
 write.csv(Daily, "output_Kursk/Kursk_REddyProc_daily.csv", row.names = FALSE)
 write.csv(coef_tbl, "output_Kursk/Kursk_light_curve_coefficients.csv", row.names = FALSE)
+
+# Create kurskfilled.csv with gap-filled meteorological data
+# This file contains daily aggregations with filled RH, VPD, Tsoil, and SWC
+kurskfilled <- Daily %>%
+  select(
+    Doy = DoY,
+    Date,
+    NEE_f_sums = NEE_sum,
+    Reco = Reco_sum,
+    GPP = GPP_sum,
+    SWC_f = SWC_mean,
+    Tsoil_f = Tsoil_mean,
+    PAR_f = PPFD_mean,
+    Tair_f = Tair_mean,
+    VPD_f = VPD_mean,
+    rH_f = rH_mean
+  )
+
+# Save kurskfilled.csv
+write.csv(kurskfilled, "kurskfilled.csv", row.names = FALSE)
+cat("\nGap-filled meteorological data saved to: kurskfilled.csv\n")
+cat("Columns included: Doy, Date, NEE_f_sums, Reco, GPP, SWC_f, Tsoil_f, PAR_f, Tair_f, VPD_f, rH_f\n")
 
 # Display all plots
 print(plot_diurnal_NEE)
