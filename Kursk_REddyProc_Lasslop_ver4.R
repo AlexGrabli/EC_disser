@@ -1957,12 +1957,9 @@ if (file.exists(meteo_file_kursk)) {
     d1
   }
   convert_vpd_to_kpa <- function(x) {
-    if (!has_values(x)) return(x)
-    v_q90 <- suppressWarnings(quantile(x, 0.9, na.rm = TRUE))
-    if (!is.finite(v_q90)) return(x)
-    if (v_q90 > 200) return(x / 1000)  # Pa -> kPa
-    if (v_q90 > 20) return(x / 100)  # hPa -> kPa
-    x  # Already in kPa
+    # VPD in kurskfilled.csv is in hPa (from REddyProc processing)
+    # Convert hPa to kPa by dividing by 10
+    x / 10
   }
 
   col_doy <- pick_first_present(nm, c("Doy", "DOY", "doy", "DayOfYear", "dayofyear"))
@@ -2154,7 +2151,6 @@ if (file.exists(meteo_file_kursk)) {
     meteo_kursk$VPD <- convert_vpd_to_kpa(meteo_kursk$VPD)
   }
 
-  par_min_cut <- 400
   roll_window_days <- 7
   roll_mean <- function(x) {
     n <- length(x)
@@ -2173,8 +2169,7 @@ if (file.exists(meteo_file_kursk)) {
   meteo_kursk_veg <- meteo_kursk %>%
     filter(Doy >= veg_start & Doy <= veg_end) %>%
     mutate(
-      PAR_plot = ifelse(is.finite(PAR) & PAR >= par_min_cut, PAR, NA_real_),
-      PAR_roll = roll_mean(PAR_plot),
+      PAR_roll = roll_mean(PAR),
       Tair_roll = roll_mean(Tair),
       RH_roll = roll_mean(RH),
       Tsoil_roll = roll_mean(Tsoil),
@@ -2196,7 +2191,7 @@ if (file.exists(meteo_file_kursk)) {
 
   # 1. Temperature (Tair)
   p_tair <- ggplot(meteo_kursk_veg, aes(x = Date)) +
-    geom_point(aes(y = Tair), color = "grey50", size = 0.5, alpha = 0.3) +
+    geom_point(aes(y = Tair), color = "grey50", size = 1, alpha = 0.5) +
     geom_line(aes(y = Tair_roll), color = "#D55E00", linewidth = 0.8, na.rm = TRUE) +
     labs(y = expression("Температура воздуха ("*degree*C*")")) +
     x_scale +
@@ -2204,15 +2199,15 @@ if (file.exists(meteo_file_kursk)) {
 
   # 2. VPD (in kPa)
   p_vpd <- ggplot(meteo_kursk_veg, aes(x = Date)) +
-    geom_point(aes(y = VPD), color = "grey50", size = 0.5, alpha = 0.3) +
+    geom_point(aes(y = VPD), color = "grey50", size = 1, alpha = 0.5) +
     geom_line(aes(y = VPD_roll), color = "orange", linewidth = 0.8, na.rm = TRUE) +
     labs(y = "VPD (кПа)") +
     x_scale +
     plot_theme
 
   # 3. PPFD
-  p_ppfd <- ggplot(meteo_kursk_veg %>% filter(is.finite(PAR_plot)), aes(x = Date)) +
-    geom_point(aes(y = PAR_plot), color = "grey50", size = 0.5, alpha = 0.3) +
+  p_ppfd <- ggplot(meteo_kursk_veg, aes(x = Date)) +
+    geom_point(aes(y = PAR), color = "grey50", size = 1, alpha = 0.5) +
     geom_line(aes(y = PAR_roll), color = "purple", linewidth = 0.8, na.rm = TRUE) +
     labs(y = expression("PPFD (мкмоль м"^-2~"с"^-1*")")) +
     x_scale +
@@ -2220,7 +2215,7 @@ if (file.exists(meteo_file_kursk)) {
 
   # 4. Soil Temperature
   p_tsoil <- ggplot(meteo_kursk_veg, aes(x = Date)) +
-    geom_point(aes(y = Tsoil), color = "grey50", size = 0.5, alpha = 0.3) +
+    geom_point(aes(y = Tsoil), color = "grey50", size = 1, alpha = 0.5) +
     geom_line(aes(y = Tsoil_roll), color = "brown", linewidth = 0.8, na.rm = TRUE) +
     labs(y = expression("Температура почвы ("*degree*C*")")) +
     x_scale +
@@ -2228,7 +2223,7 @@ if (file.exists(meteo_file_kursk)) {
 
   # 5. Soil Water Content
   p_swc <- ggplot(meteo_kursk_veg, aes(x = Date)) +
-    geom_point(aes(y = SWC), color = "grey50", size = 0.5, alpha = 0.3, na.rm = TRUE) +
+    geom_point(aes(y = SWC), color = "grey50", size = 1, alpha = 0.5, na.rm = TRUE) +
     geom_line(aes(y = SWC_roll), color = "cyan", linewidth = 0.8, na.rm = TRUE) +
     labs(y = "Влажность почвы (%)") +
     x_scale +
@@ -2246,7 +2241,7 @@ if (file.exists(meteo_file_kursk)) {
 
   p_precip <- ggplot(meteo_kursk_veg, aes(x = Date)) +
     geom_col(aes(y = Precip * scale_factor), fill = "steelblue", alpha = 0.7, width = 1) +
-    geom_point(aes(y = SWC), color = "grey50", size = 0.5, alpha = 0.3, na.rm = TRUE) +
+    geom_point(aes(y = SWC), color = "grey50", size = 1, alpha = 0.5, na.rm = TRUE) +
     geom_line(aes(y = SWC_roll), color = "black", linewidth = 0.8, na.rm = TRUE) +
     scale_y_continuous(
       name = "Осадки (мм)",
