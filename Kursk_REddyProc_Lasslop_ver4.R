@@ -1956,13 +1956,13 @@ if (file.exists(meteo_file_kursk)) {
     }
     d1
   }
-  convert_vpd_to_pa <- function(x) {
+  convert_vpd_to_kpa <- function(x) {
     if (!has_values(x)) return(x)
     v_q90 <- suppressWarnings(quantile(x, 0.9, na.rm = TRUE))
     if (!is.finite(v_q90)) return(x)
-    if (v_q90 <= 20) return(x * 1000)  # kPa -> Pa
-    if (v_q90 <= 200) return(x * 100)  # hPa -> Pa
-    x
+    if (v_q90 > 200) return(x / 1000)  # Pa -> kPa
+    if (v_q90 > 20) return(x / 100)  # hPa -> kPa
+    x  # Already in kPa
   }
 
   col_doy <- pick_first_present(nm, c("Doy", "DOY", "doy", "DayOfYear", "dayofyear"))
@@ -2151,7 +2151,7 @@ if (file.exists(meteo_file_kursk)) {
   }
 
   if (has_values(meteo_kursk$VPD)) {
-    meteo_kursk$VPD <- convert_vpd_to_pa(meteo_kursk$VPD)
+    meteo_kursk$VPD <- convert_vpd_to_kpa(meteo_kursk$VPD)
   }
 
   par_min_cut <- 400
@@ -2166,7 +2166,12 @@ if (file.exists(meteo_file_kursk)) {
     out
   }
 
-  meteo_kursk <- meteo_kursk %>%
+  # Filter by vegetation period (DoY 115-226 for Kursk 2013)
+  veg_start <- 115
+  veg_end <- 226
+
+  meteo_kursk_veg <- meteo_kursk %>%
+    filter(Doy >= veg_start & Doy <= veg_end) %>%
     mutate(
       PAR_plot = ifelse(is.finite(PAR) & PAR >= par_min_cut, PAR, NA_real_),
       PAR_roll = roll_mean(PAR_plot),
@@ -2177,133 +2182,95 @@ if (file.exists(meteo_file_kursk)) {
       VPD_roll = roll_mean(VPD)
     )
 
-  use_date_axis <- any(!is.na(meteo_kursk$Date))
-  x_var <- if (use_date_axis) "Date" else "Doy"
-  x_lab <- if (use_date_axis) "Дата" else "День года"
-  x_scale <- if (use_date_axis) {
-    scale_x_date(date_breaks = "2 weeks", date_labels = "%d.%m")
-  } else {
-    doy_min <- floor(min(meteo_kursk$Doy, na.rm = TRUE))
-    doy_max <- ceiling(max(meteo_kursk$Doy, na.rm = TRUE))
-    scale_x_continuous(
-      limits = c(doy_min, doy_max),
-      breaks = scales::pretty_breaks(n = 8)
+  # Setup x-axis scale with dates
+  x_scale <- scale_x_date(date_breaks = "2 weeks", date_labels = "%d.%m")
+  x_lab <- "Дата"
+
+  # Common theme for all plots
+  plot_theme <- theme_bw(base_size = 10) +
+    theme(
+      panel.grid.minor = element_blank(),
+      axis.title.x = element_blank(),
+      plot.margin = margin(5, 5, 5, 5)
     )
+
+  # 1. Temperature (Tair)
+  p_tair <- ggplot(meteo_kursk_veg, aes(x = Date)) +
+    geom_point(aes(y = Tair), color = "grey50", size = 0.5, alpha = 0.3) +
+    geom_line(aes(y = Tair_roll), color = "#D55E00", linewidth = 0.8, na.rm = TRUE) +
+    labs(y = expression("Температура воздуха ("*degree*C*")")) +
+    x_scale +
+    plot_theme
+
+  # 2. VPD (in kPa)
+  p_vpd <- ggplot(meteo_kursk_veg, aes(x = Date)) +
+    geom_point(aes(y = VPD), color = "grey50", size = 0.5, alpha = 0.3) +
+    geom_line(aes(y = VPD_roll), color = "orange", linewidth = 0.8, na.rm = TRUE) +
+    labs(y = "VPD (кПа)") +
+    x_scale +
+    plot_theme
+
+  # 3. PPFD
+  p_ppfd <- ggplot(meteo_kursk_veg %>% filter(is.finite(PAR_plot)), aes(x = Date)) +
+    geom_point(aes(y = PAR_plot), color = "grey50", size = 0.5, alpha = 0.3) +
+    geom_line(aes(y = PAR_roll), color = "purple", linewidth = 0.8, na.rm = TRUE) +
+    labs(y = expression("PPFD (мкмоль м"^-2~"с"^-1*")")) +
+    x_scale +
+    plot_theme
+
+  # 4. Soil Temperature
+  p_tsoil <- ggplot(meteo_kursk_veg, aes(x = Date)) +
+    geom_point(aes(y = Tsoil), color = "grey50", size = 0.5, alpha = 0.3) +
+    geom_line(aes(y = Tsoil_roll), color = "brown", linewidth = 0.8, na.rm = TRUE) +
+    labs(y = expression("Температура почвы ("*degree*C*")")) +
+    x_scale +
+    plot_theme
+
+  # 5. Soil Water Content
+  p_swc <- ggplot(meteo_kursk_veg, aes(x = Date)) +
+    geom_point(aes(y = SWC), color = "grey50", size = 0.5, alpha = 0.3, na.rm = TRUE) +
+    geom_line(aes(y = SWC_roll), color = "cyan", linewidth = 0.8, na.rm = TRUE) +
+    labs(y = "Влажность почвы (%)") +
+    x_scale +
+    plot_theme
+
+  # 6. Precipitation with SWC on secondary axis
+  # Scale precipitation for dual axis
+  swc_max <- suppressWarnings(max(meteo_kursk_veg$SWC_roll, na.rm = TRUE))
+  precip_max <- suppressWarnings(max(meteo_kursk_veg$Precip, na.rm = TRUE))
+  scale_factor <- if (is.finite(swc_max) && is.finite(precip_max) && precip_max > 0) {
+    swc_max / precip_max * 0.8
+  } else {
+    1
   }
 
-  if (has_values(meteo_kursk$PAR_plot)) {
-    p_par <- ggplot(filter(meteo_kursk, is.finite(PAR_plot)), aes(x = .data[[x_var]])) +
-      geom_point(aes(y = PAR_plot), color = "grey50", size = 0.35, alpha = 0.35) +
-      geom_line(aes(y = PAR_roll), color = "darkgreen", linewidth = 0.7, na.rm = TRUE) +
-      labs(
-        y = "ФАР, мкмоль м^-2 с^-1",
-        x = x_lab
-      ) +
-      x_scale +
-      theme_bw()
-    ggsave("Kursk_meteo_PAR.png", plot = p_par, width = 12, height = 4, dpi = 300)
-  }
+  p_precip <- ggplot(meteo_kursk_veg, aes(x = Date)) +
+    geom_col(aes(y = Precip * scale_factor), fill = "steelblue", alpha = 0.7, width = 1) +
+    geom_point(aes(y = SWC), color = "grey50", size = 0.5, alpha = 0.3, na.rm = TRUE) +
+    geom_line(aes(y = SWC_roll), color = "black", linewidth = 0.8, na.rm = TRUE) +
+    scale_y_continuous(
+      name = "Осадки (мм)",
+      sec.axis = sec_axis(~ ., name = "Влажность почвы (%)")
+    ) +
+    x_scale +
+    plot_theme +
+    theme(axis.title.x = element_text())
 
-  if (has_values(meteo_kursk$Tair)) {
-    p_tair <- ggplot(meteo_kursk, aes(x = .data[[x_var]])) +
-      geom_point(aes(y = Tair, color = "Температура воздуха"), size = 0.35, alpha = 0.35) +
-      geom_line(aes(y = Tair_roll, color = "Температура воздуха"), linewidth = 0.7, na.rm = TRUE) +
-      scale_color_manual(name = "", values = c("Температура воздуха" = "#D55E00")) +
-      labs(y = "Температура воздуха, °C", x = x_lab) +
-      x_scale +
-      theme_bw() +
-      theme(legend.position = "top", legend.background = element_blank())
-    ggsave("Kursk_meteo_Tair.png", plot = p_tair, width = 12, height = 4, dpi = 300)
-  }
+  # Combine all plots in 3x2 grid
+  combined_plot <- gridExtra::grid.arrange(
+    p_tair, p_vpd,
+    p_ppfd, p_tsoil,
+    p_swc, p_precip,
+    ncol = 2,
+    top = grid::textGrob("Динамика метеоусловий за вегетационный сезон 2013",
+                         gp = grid::gpar(fontsize = 14, fontface = "bold"))
+  )
 
-  if (has_values(meteo_kursk$Tsoil)) {
-    p_tsoil <- ggplot(meteo_kursk, aes(x = .data[[x_var]])) +
-      geom_point(aes(y = Tsoil, color = "Температура почвы"), size = 0.35, alpha = 0.35) +
-      geom_line(aes(y = Tsoil_roll, color = "Температура почвы"), linewidth = 0.7, na.rm = TRUE) +
-      scale_color_manual(name = "", values = c("Температура почвы" = "#000000")) +
-      labs(y = "Температура почвы, °C", x = x_lab) +
-      x_scale +
-      theme_bw() +
-      theme(legend.position = "top", legend.background = element_blank())
-    ggsave("Kursk_meteo_Tsoil.png", plot = p_tsoil, width = 12, height = 4, dpi = 300)
-  }
+  # Save combined plot
+  ggsave("Kursk_meteo_combined.png", plot = combined_plot,
+         width = 12, height = 10, dpi = 300)
 
-  if (has_values(meteo_kursk$SWC)) {
-    p_swc <- ggplot(meteo_kursk, aes(x = .data[[x_var]])) +
-      geom_point(aes(y = SWC), color = "grey50", size = 0.35, alpha = 0.35, na.rm = TRUE) +
-      geom_line(aes(y = SWC_roll), color = "#009E73", linewidth = 0.7, na.rm = TRUE) +
-      labs(y = "Влажность почвы, %", x = x_lab) +
-      x_scale +
-      theme_bw()
-    ggsave("Kursk_meteo_SWC.png", plot = p_swc, width = 12, height = 4, dpi = 300)
-  }
-
-  if (has_values(meteo_kursk$VPD)) {
-    p_vpd <- ggplot(meteo_kursk, aes(x = .data[[x_var]])) +
-      geom_point(aes(y = VPD), color = "grey50", size = 0.35, alpha = 0.35) +
-      geom_line(aes(y = VPD_roll), color = "#0072B2", linewidth = 0.7, na.rm = TRUE) +
-      labs(y = "Дефицит давления пара (VPD), Па", x = x_lab) +
-      x_scale +
-      theme_bw()
-    ggsave("Kursk_meteo_VPD.png", plot = p_vpd, width = 12, height = 4, dpi = 300)
-  }
-
-  if (has_values(meteo_kursk$Precip) && has_values(meteo_kursk$RH)) {
-    rh_max <- suppressWarnings(max(meteo_kursk$RH, na.rm = TRUE))
-    precip_max <- suppressWarnings(max(meteo_kursk$Precip, na.rm = TRUE))
-    rh_sf <- if (is.finite(rh_max) && rh_max > 0 && is.finite(precip_max) && precip_max > 0) {
-      precip_max / rh_max
-    } else {
-      1
-    }
-
-    p_rh_precip <- ggplot() +
-      geom_col(
-        data = meteo_kursk,
-        aes(x = .data[[x_var]], y = Precip, fill = "Осадки"),
-        width = 0.9,
-        alpha = 0.85
-      ) +
-      geom_point(
-        data = meteo_kursk,
-        aes(x = .data[[x_var]], y = RH * rh_sf, color = "Относительная влажность"),
-        size = 0.35,
-        alpha = 0.35
-      ) +
-      geom_line(
-        data = meteo_kursk,
-        aes(x = .data[[x_var]], y = RH_roll * rh_sf, color = "Относительная влажность"),
-        linewidth = 0.7,
-        na.rm = TRUE
-      ) +
-      scale_y_continuous(
-        name = "Осадки, мм/день",
-        sec.axis = sec_axis(~ . / rh_sf, name = "Относительная влажность, %")
-      ) +
-      scale_fill_manual(NULL, values = c("Осадки" = "#92C5DE")) +
-      scale_color_manual(NULL, values = c("Относительная влажность" = "grey30")) +
-      labs(x = x_lab) +
-      x_scale +
-      theme_bw() +
-      theme(legend.position = "bottom", legend.background = element_blank())
-
-    ggsave("Kursk_meteo_RH_Precip.png", plot = p_rh_precip, width = 12, height = 4, dpi = 300)
-  } else if (has_values(meteo_kursk$Precip)) {
-    p_precip <- ggplot(meteo_kursk, aes(x = .data[[x_var]])) +
-      geom_col(aes(y = Precip), fill = "#92C5DE", width = 0.9, alpha = 0.85) +
-      labs(y = "Осадки, мм/день", x = x_lab) +
-      x_scale +
-      theme_bw()
-    ggsave("Kursk_meteo_Precip.png", plot = p_precip, width = 12, height = 4, dpi = 300)
-  } else if (has_values(meteo_kursk$RH)) {
-    p_rh <- ggplot(meteo_kursk, aes(x = .data[[x_var]])) +
-      geom_point(aes(y = RH), color = "grey50", size = 0.35, alpha = 0.35) +
-      geom_line(aes(y = RH_roll), color = "grey30", linewidth = 0.7, na.rm = TRUE) +
-      labs(y = "Относительная влажность, %", x = x_lab) +
-      x_scale +
-      theme_bw()
-    ggsave("Kursk_meteo_RH.png", plot = p_rh, width = 12, height = 4, dpi = 300)
-  }
+  cat("\n[meteo] Графики метеоусловий сохранены: Kursk_meteo_combined.png\n")
 } else {
   cat("\n[meteo] Файл kurskfilled.csv не найден. Построение метеографиков пропущено.\n")
 }
