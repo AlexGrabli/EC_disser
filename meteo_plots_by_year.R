@@ -1,6 +1,6 @@
 # ======================================================================
 # Построение графиков метеоусловий по годам
-# Курск 2013, Москва 2013, Москва 2016, Москва 2023
+# Москва 2013, Москва 2016, Москва 2023
 # Референс: 6-панельный график с температурой воздуха, VPD, PPFD,
 #           температурой почвы, влажностью почвы, осадками/влажностью
 # ======================================================================
@@ -11,24 +11,12 @@ suppressPackageStartupMessages({
   library(janitor)
   library(stringr)
   library(patchwork)
+  library(signal)  # Для Savitzky-Golay фильтра
 })
 
 # ----------------------- Константы фаз -----------------------
-# Курск 2013 (яровая пшеница) - из kurskfilled.csv
-# DoY: seeds 115-117, germination 118-127, sprouting 128, tillering 136-156,
-#      leaf tube 157-164, milky 165-179, wax 180-195, complete 196-225, harvest 226-244
-B2013_Kursk <- list(
-  Sowing="2013-04-25",      # DoY 115
-  Emergence="2013-04-28",   # DoY 118 (germination)
-  Tillering="2013-05-08",   # DoY 128 (sprouting -> tillering)
-  StemElong="2013-06-06",   # DoY 157 (leaf tube formation)
-  Heading="2013-06-14",     # DoY 165 (milky ripeness start)
-  Flowering="2013-06-29",   # DoY 180 (wax ripeness start)
-  Ripening="2013-07-15",    # DoY 196 (complete ripeness)
-  Harvesting="2013-08-14"   # DoY 226
-)
 # Москва 2013 (яровая пшеница)
-B2013_Moscow <- list(
+B2013 <- list(
   Sowing="2013-05-14", Emergence="2013-05-17", Tillering="2013-06-03",
   StemElong="2013-06-27", Heading="2013-07-17", Flowering="2013-07-28",
   Ripening="2013-08-03", Harvesting="2013-08-14"
@@ -77,104 +65,38 @@ sum_or_na <- function(x) {
   sum(x, na.rm = TRUE)
 }
 
-roll_mean_index <- function(x, idx, days_window) {
-  if (!requireNamespace("slider", quietly = TRUE)) {
-    return(rep(NA_real_, length(x)))
+# Savitzky-Golay фильтр с обработкой NA
+sg_smooth <- function(x, p = 3, n = 49) {
+  # p - порядок полинома, n - размер окна (должен быть нечетным)
+  if (length(x) < n) {
+    n <- max(3, floor(length(x) / 2) * 2 + 1)  # Уменьшаем окно если мало данных
   }
-  slider::slide_index_dbl(
-    x,
-    idx,
-    ~mean(.x, na.rm = TRUE),
-    .before = lubridate::days(days_window - 1),
-    .complete = FALSE
+  if (n %% 2 == 0) n <- n + 1  # Окно должно быть нечетным
+  if (n < p + 2) return(x)  # Недостаточно данных
+
+  # Заменяем NA на интерполированные значения для фильтрации
+  x_interp <- x
+  na_idx <- is.na(x)
+  if (all(na_idx)) return(x)
+  if (any(na_idx)) {
+    # Линейная интерполяция для NA
+    x_interp <- approx(seq_along(x)[!na_idx], x[!na_idx],
+                       xout = seq_along(x), rule = 2)$y
+  }
+
+  # Применяем Savitzky-Golay фильтр
+  result <- tryCatch(
+    sgolayfilt(x_interp, p = p, n = n),
+    error = function(e) x_interp
   )
-}
 
-# ----------------------- Загрузка данных Курск 2013 -----------------------
-load_biomet_kursk_2013 <- function(path, gapfill_path = NULL) {
-  # Kursk_data_half_our.csv - CSV формат
-  raw <- read_csv(path, show_col_types = FALSE)
-  names(raw) <- trimws(names(raw))
-
-  # Парсим дату
-  dt <- parse_dt_guess(raw$DateTime)
-
-  # Извлекаем переменные
-  tair <- to_num(raw$Ta_Avg)
-  rh <- to_num(raw$RH_Avg)
-
-  # VPD вычисляем из температуры и RH
-  vpd <- calc_vpd_kpa(tair, rh)
-
-  ppfd <- to_num(raw$PAR_Den_Avg)
-
-  # Температура почвы
-  tsoil <- to_num(raw$Tsoil)
-
-  # Влажность почвы - среднее по глубинам (m³/m³ -> %)
-  swc_10 <- to_num(raw$SWC_avg_10cm_Avg)
-  swc_20 <- to_num(raw$SWC_avg_20cm_Avg)
-  swc_50 <- to_num(raw$SWC_avg_50cm_Avg)
-  swc_mat <- cbind(swc_10, swc_20, swc_50)
-  swc <- rowMeans(swc_mat, na.rm = TRUE) * 100  # Переводим m³/m³ в %
-  swc[!is.finite(swc)] <- NA_real_
-
-  # Осадки
-  precip <- to_num(raw$P_Tot)
-
-  biomet <- tibble(
-    DateTime = dt,
-    Date = as.Date(dt),
-    Tair = tair,
-    RH = rh,
-    VPD = vpd,
-    PPFD = ppfd,
-    Tsoil = tsoil,
-    SWC = swc,
-    Precip = precip
-  ) %>%
-    filter(!is.na(DateTime))
-
-  # Gap-filling из kurskfilled.csv (дневные данные)
-  if (!is.null(gapfill_path) && file.exists(gapfill_path)) {
-    cat("  Загружаем gap-filled данные из kurskfilled.csv...\n")
-    gf_raw <- read_csv(gapfill_path, show_col_types = FALSE)
-    names(gf_raw) <- trimws(names(gf_raw))
-
-    # kurskfilled.csv: Doy, date, SWC_1, Tsoil_f, PAR_Den_Avg, Tair_f, Rain_mm_Tot_sums
-    # date - Excel serial date number (40292 = 2013-04-25)
-    gf_data <- gf_raw %>%
-      mutate(
-        Date = as.Date(to_num(date), origin = "1899-12-30"),
-        Tair_gf = to_num(Tair_f),
-        Tsoil_gf = to_num(Tsoil_f),
-        PPFD_gf = to_num(PAR_Den_Avg),
-        SWC_gf = to_num(SWC_1) * 100,  # m³/m³ -> %
-        Precip_gf = to_num(Rain_mm_Tot_sums)
-      ) %>%
-      select(Date, Tair_gf, Tsoil_gf, PPFD_gf, SWC_gf, Precip_gf) %>%
-      filter(!is.na(Date))
-
-    cat(sprintf("    Загружено %d дней gap-filled данных\n", nrow(gf_data)))
-
-    # Присоединяем gap-filled данные по дате
-    biomet <- biomet %>%
-      left_join(gf_data, by = "Date") %>%
-      mutate(
-        Tair = coalesce(Tair, Tair_gf),
-        Tsoil = coalesce(Tsoil, Tsoil_gf),
-        PPFD = coalesce(PPFD, PPFD_gf),
-        SWC = coalesce(SWC, SWC_gf),
-        Precip = coalesce(Precip, Precip_gf)
-      ) %>%
-      select(-ends_with("_gf"))
-  }
-
-  biomet
+  # Возвращаем NA на исходные позиции
+  result[na_idx] <- NA
+  result
 }
 
 # ----------------------- Загрузка данных Москва 2013 -----------------------
-load_biomet_moscow_2013 <- function(path) {
+load_biomet_2013 <- function(path) {
   # biomet2013.csv - точка с запятой разделитель
   raw <- read_delim(path, delim = ";", show_col_types = FALSE)
   names(raw) <- trimws(names(raw))
@@ -530,8 +452,8 @@ load_precip_2023 <- function(precip_path, year = 2023) {
 }
 
 # ----------------------- Функция построения графиков -----------------------
-create_meteo_plot <- function(biomet, year, bounds, location = "Курск",
-                              roll_window_days = 7, ppfd_thresh = 10,
+create_meteo_plot <- function(biomet, year, bounds, location = "Москва",
+                              sg_order = 3, sg_window = 49, ppfd_thresh = 10,
                               use_data_start = FALSE) {
   if (is.null(biomet) || nrow(biomet) == 0) {
     cat(sprintf("  !! Нет данных биомета для %d\n", year))
@@ -552,19 +474,19 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Курск",
     season_start <- as.POSIXct(as.Date(bounds$Sowing), tz = "UTC")
   }
 
-  # Фильтруем сезон и добавляем скользящие средние
+  # Фильтруем сезон и применяем Savitzky-Golay фильтр
   biomet_season <- biomet %>%
     mutate(DateTime = as.POSIXct(DateTime, tz = "UTC")) %>%
     filter(DateTime >= season_start & DateTime <= season_end) %>%
     arrange(DateTime) %>%
     mutate(
       PPFD_day = ifelse(is.finite(PPFD) & PPFD > ppfd_thresh, PPFD, NA_real_),
-      Tair_roll = roll_mean_index(Tair, DateTime, roll_window_days),
-      RH_roll = roll_mean_index(RH, DateTime, roll_window_days),
-      VPD_roll = roll_mean_index(VPD, DateTime, roll_window_days),
-      PPFD_roll = roll_mean_index(PPFD_day, DateTime, roll_window_days),
-      Tsoil_roll = roll_mean_index(Tsoil, DateTime, roll_window_days),
-      SWC_roll = roll_mean_index(SWC, DateTime, roll_window_days)
+      Tair_sg = sg_smooth(Tair, p = sg_order, n = sg_window),
+      RH_sg = sg_smooth(RH, p = sg_order, n = sg_window),
+      VPD_sg = sg_smooth(VPD, p = sg_order, n = sg_window),
+      PPFD_sg = sg_smooth(PPFD_day, p = sg_order, n = sg_window),
+      Tsoil_sg = sg_smooth(Tsoil, p = sg_order, n = sg_window),
+      SWC_sg = sg_smooth(SWC, p = sg_order, n = sg_window)
     )
 
   if (nrow(biomet_season) == 0) {
@@ -599,7 +521,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Курск",
     plots_list$Tair <- ggplot(biomet_season %>% filter(is.finite(Tair)),
                               aes(x = DateTime)) +
       geom_point(aes(y = Tair), color = "grey50", size = 0.35, alpha = 0.35) +
-      geom_line(aes(y = Tair_roll), color = "#d62728", linewidth = 0.8, na.rm = TRUE) +
+      geom_line(aes(y = Tair_sg), color = "#d62728", linewidth = 0.8, na.rm = TRUE) +
       labs(title = sprintf("Динамика метеоусловий за вегетационный сезон %d", year),
            x = "", y = "Температура воздуха (°C)") +
       time_scale +
@@ -611,7 +533,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Курск",
     plots_list$VPD <- ggplot(biomet_season %>% filter(is.finite(VPD)),
                              aes(x = DateTime)) +
       geom_point(aes(y = VPD), color = "grey50", size = 0.35, alpha = 0.35) +
-      geom_line(aes(y = VPD_roll), color = "#ff7f0e", linewidth = 0.8, na.rm = TRUE) +
+      geom_line(aes(y = VPD_sg), color = "#ff7f0e", linewidth = 0.8, na.rm = TRUE) +
       labs(x = "", y = "VPD (кПа)") +
       time_scale +
       theme_meteo
@@ -622,7 +544,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Курск",
     plots_list$PPFD <- ggplot(biomet_season %>% filter(is.finite(PPFD_day)),
                               aes(x = DateTime)) +
       geom_point(aes(y = PPFD_day), color = "grey50", size = 0.35, alpha = 0.35) +
-      geom_line(aes(y = PPFD_roll), color = "#9467bd", linewidth = 0.8, na.rm = TRUE) +
+      geom_line(aes(y = PPFD_sg), color = "#9467bd", linewidth = 0.8, na.rm = TRUE) +
       labs(x = "", y = expression(PPFD~(мкмоль~м^{-2}~с^{-1}))) +
       time_scale +
       theme_meteo
@@ -633,7 +555,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Курск",
     plots_list$Tsoil <- ggplot(biomet_season %>% filter(is.finite(Tsoil)),
                                aes(x = DateTime)) +
       geom_point(aes(y = Tsoil), color = "grey50", size = 0.35, alpha = 0.35) +
-      geom_line(aes(y = Tsoil_roll), color = "#8c564b", linewidth = 0.8, na.rm = TRUE) +
+      geom_line(aes(y = Tsoil_sg), color = "#8c564b", linewidth = 0.8, na.rm = TRUE) +
       labs(x = "", y = "Температура почвы (°C)") +
       time_scale +
       theme_meteo
@@ -644,7 +566,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Курск",
     plots_list$SWC <- ggplot(biomet_season %>% filter(is.finite(SWC)),
                              aes(x = DateTime)) +
       geom_point(aes(y = SWC), color = "grey50", size = 0.35, alpha = 0.35) +
-      geom_line(aes(y = SWC_roll), color = "#17becf", linewidth = 0.8, na.rm = TRUE) +
+      geom_line(aes(y = SWC_sg), color = "#17becf", linewidth = 0.8, na.rm = TRUE) +
       labs(x = "Дата", y = "Влажность почвы (%)") +
       time_scale +
       theme_meteo
@@ -668,7 +590,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Курск",
                  aes(x = DateTime, y = RH * rh_sf),
                  color = "grey40", size = 0.35, alpha = 0.35) +
       geom_line(data = biomet_season,
-                aes(x = DateTime, y = RH_roll * rh_sf),
+                aes(x = DateTime, y = RH_sg * rh_sf),
                 color = "grey40", linewidth = 0.8, na.rm = TRUE) +
       scale_y_continuous(name = "Осадки (мм)",
                          sec.axis = sec_axis(~ . / rh_sf, name = "Относительная влажность (%)")) +
@@ -686,7 +608,7 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Курск",
     plots_list$RH <- ggplot(biomet_season %>% filter(is.finite(RH)),
                             aes(x = DateTime)) +
       geom_point(aes(y = RH), color = "grey50", size = 0.35, alpha = 0.35) +
-      geom_line(aes(y = RH_roll), color = "#2ca02c", linewidth = 0.8, na.rm = TRUE) +
+      geom_line(aes(y = RH_sg), color = "#2ca02c", linewidth = 0.8, na.rm = TRUE) +
       labs(x = "Дата", y = "Относительная влажность (%)") +
       time_scale +
       theme_meteo
@@ -702,14 +624,11 @@ create_meteo_plot <- function(biomet, year, bounds, location = "Курск",
 }
 
 # ----------------------- ОСНОВНОЙ КОД -----------------------
-cat("\n=== Построение графиков метеоусловий по годам ===\n\n")
+cat("\n=== Построение графиков метеоусловий по годам (Москва) ===\n\n")
 
 # Пути к файлам
-# Курск 2013
-kursk_2013_path <- "Kursk_data_half_our.csv"
-kursk_gapfill_path <- "kurskfilled.csv"
 # Москва 2013
-moscow_2013_path <- "biomet2013.csv"
+biomet_2013_path <- "biomet2013.csv"
 # Москва 2016
 biomet_2016_path <- "Moscow_2016_verFin.csv"
 precip_2016_path <- "2016_precip.csv"
@@ -719,21 +638,13 @@ gapfilled_2023_path <- "ИТОГ2_BarleyFilledAllScen_65p_biom_thrash_new2505.cs
 biomet_2023_path <- "Anal11_biomet.csv"
 precip_2023_path <- "Осадки.csv"
 
-# Загрузка данных Курск 2013
-cat("Загрузка данных 2013 (Курск)...\n")
-biomet_kursk_2013 <- load_biomet_kursk_2013(kursk_2013_path, kursk_gapfill_path)
-cat(sprintf("  Загружено %d записей, диапазон: %s - %s\n",
-            nrow(biomet_kursk_2013),
-            min(biomet_kursk_2013$Date, na.rm = TRUE),
-            max(biomet_kursk_2013$Date, na.rm = TRUE)))
-
 # Загрузка данных Москва 2013
-cat("\nЗагрузка данных 2013 (Москва)...\n")
-biomet_moscow_2013 <- load_biomet_moscow_2013(moscow_2013_path)
+cat("Загрузка данных 2013 (Москва)...\n")
+biomet_2013 <- load_biomet_2013(biomet_2013_path)
 cat(sprintf("  Загружено %d записей, диапазон: %s - %s\n",
-            nrow(biomet_moscow_2013),
-            min(biomet_moscow_2013$Date, na.rm = TRUE),
-            max(biomet_moscow_2013$Date, na.rm = TRUE)))
+            nrow(biomet_2013),
+            min(biomet_2013$Date, na.rm = TRUE),
+            max(biomet_2013$Date, na.rm = TRUE)))
 
 cat("\nЗагрузка данных 2016 (Москва)...\n")
 biomet_2016 <- load_biomet_2016(biomet_2016_path, precip_2016_path, swc_2016_path)
@@ -787,18 +698,10 @@ if (file.exists(precip_2023_path)) {
 # Построение и сохранение графиков
 cat("\n=== Построение графиков ===\n")
 
-cat("\n2013 (Курск)...\n")
-p_kursk_2013 <- create_meteo_plot(biomet_kursk_2013, 2013, B2013_Kursk, location = "Курск")
-if (!is.null(p_kursk_2013)) {
-  ggsave("Meteo_dynamics_2013_Kursk_ru.png", p_kursk_2013,
-         width = 14, height = 10, dpi = 300, bg = "white")
-  cat("  -> Сохранено: Meteo_dynamics_2013_Kursk_ru.png\n")
-}
-
 cat("\n2013 (Москва)...\n")
-p_moscow_2013 <- create_meteo_plot(biomet_moscow_2013, 2013, B2013_Moscow, location = "Москва")
-if (!is.null(p_moscow_2013)) {
-  ggsave("Meteo_dynamics_2013_Moscow_ru.png", p_moscow_2013,
+p2013 <- create_meteo_plot(biomet_2013, 2013, B2013, location = "Москва")
+if (!is.null(p2013)) {
+  ggsave("Meteo_dynamics_2013_Moscow_ru.png", p2013,
          width = 14, height = 10, dpi = 300, bg = "white")
   cat("  -> Сохранено: Meteo_dynamics_2013_Moscow_ru.png\n")
 }
