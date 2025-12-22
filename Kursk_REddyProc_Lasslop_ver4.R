@@ -2249,28 +2249,30 @@ if (file.exists(meteo_file_kursk)) {
   p_swc <- ggplot(meteo_kursk_veg, aes(x = Date)) +
     geom_point(aes(y = SWC), color = "grey50", size = 1, alpha = 0.5, na.rm = TRUE) +
     geom_line(aes(y = SWC_smooth), color = "cyan", linewidth = 0.8, na.rm = TRUE) +
-    labs(y = "Влажность почвы (%)") +
+    labs(y = "Влажность почвы (%)", x = "Дата") +
     x_scale +
-    plot_theme
+    plot_theme +
+    theme(axis.title.x = element_text())
 
-  # 6. Precipitation with SWC on secondary axis
+  # 6. Precipitation with RH (Relative Humidity) on secondary axis
   # Scale precipitation for dual axis
-  swc_max <- suppressWarnings(max(meteo_kursk_veg$SWC_smooth, na.rm = TRUE))
+  rh_max <- suppressWarnings(max(meteo_kursk_veg$RH_smooth, na.rm = TRUE))
   precip_max <- suppressWarnings(max(meteo_kursk_veg$Precip, na.rm = TRUE))
-  scale_factor <- if (is.finite(swc_max) && is.finite(precip_max) && precip_max > 0) {
-    swc_max / precip_max * 0.8
+  scale_factor <- if (is.finite(rh_max) && is.finite(precip_max) && precip_max > 0) {
+    rh_max / precip_max * 0.8
   } else {
     1
   }
 
   p_precip <- ggplot(meteo_kursk_veg, aes(x = Date)) +
     geom_col(aes(y = Precip * scale_factor), fill = "steelblue", alpha = 0.7, width = 1) +
-    geom_point(aes(y = SWC), color = "grey50", size = 1, alpha = 0.5, na.rm = TRUE) +
-    geom_line(aes(y = SWC_smooth), color = "black", linewidth = 0.8, na.rm = TRUE) +
+    geom_point(aes(y = RH), color = "grey50", size = 1, alpha = 0.5, na.rm = TRUE) +
+    geom_line(aes(y = RH_smooth), color = "black", linewidth = 0.8, na.rm = TRUE) +
     scale_y_continuous(
       name = "Осадки (мм)",
-      sec.axis = sec_axis(~ ., name = "Влажность почвы (%)")
+      sec.axis = sec_axis(~ ., name = "Влажность воздуха (%)")
     ) +
+    labs(x = "Дата") +
     x_scale +
     plot_theme +
     theme(axis.title.x = element_text())
