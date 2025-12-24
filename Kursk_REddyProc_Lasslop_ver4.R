@@ -1917,235 +1917,13 @@ if (file.exists(moscow_file)) {
 }
 
 # =============================================================================
-# 9. METEO PLOTS FROM kurskfilled.csv
+# =============================================================================
+# 9. METEO PLOTS FROM HALF-HOURLY GAP-FILLED DATA
 # =============================================================================
 
-meteo_file_kursk <- "kurskfilled.csv"
-if (file.exists(meteo_file_kursk)) {
-  meteo_raw <- data.table::fread(meteo_file_kursk, encoding = "UTF-8")
-  names(meteo_raw) <- trimws(names(meteo_raw))
-  nm <- names(meteo_raw)
-
-  pick_first_present <- function(nm, candidates) {
-    nm_lower <- tolower(nm)
-    candidates_lower <- tolower(candidates)
-    for (cand in candidates_lower) {
-      idx <- which(nm_lower == cand)
-      if (length(idx) > 0) return(nm[idx[1]])
-    }
-    NA_character_
-  }
-
-  to_num <- function(x) suppressWarnings(as.numeric(x))
-  has_values <- function(x) sum(is.finite(x)) > 2
-  gap_fill_by_doy <- function(doy, x) {
-    ok <- is.finite(doy) & is.finite(x)
-    if (sum(ok) < 2) return(x)
-    x_filled <- x
-    x_filled[!ok] <- approx(doy[ok], x[ok], doy[!ok], rule = 2)$y
-    x_filled
-  }
-  parse_date_any <- function(x) {
-    x_num <- suppressWarnings(as.numeric(x))
-    if (sum(is.finite(x_num)) > 0) {
-      return(as.Date(x_num, origin = "1899-12-30"))
-    }
-    d1 <- suppressWarnings(as.Date(x))
-    if (all(is.na(d1))) {
-      d1 <- suppressWarnings(lubridate::ymd(x))
-    }
-    d1
-  }
-  convert_vpd_to_kpa <- function(x) {
-    # VPD in kurskfilled.csv is in hPa (from REddyProc processing)
-    # Convert hPa to kPa by dividing by 10
-    x / 10
-  }
-
-  col_doy <- pick_first_present(nm, c("Doy", "DOY", "doy", "DayOfYear", "dayofyear"))
-  col_date <- pick_first_present(nm, c("date", "Date"))
-  col_par <- pick_first_present(nm, c("PAR_f", "PPFD_f", "PPFD_f_mean", "PPFD_f_avg"))
-  col_tair <- pick_first_present(nm, c("Tair_f", "TA_f", "Ta_f", "tair_f"))
-  col_rh <- pick_first_present(nm, c("RH_f", "rH_f", "rh_f"))
-  col_tsoil <- pick_first_present(nm, c("Tsoil_f", "TS_f", "tsoil_f"))
-  col_swc <- pick_first_present(nm, c("SWC_f", "swc_f"))
-  col_vpd <- pick_first_present(nm, c("VPD_f", "vpd_f"))
-  col_precip <- pick_first_present(nm, c("Rain_mm_Tot_sums"))
-
-  if (is.na(col_doy)) {
-    stop("В kurskfilled.csv не найдена колонка дня года (Doy/DOY).")
-  }
-
-  missing_cols <- c(
-    PAR_f = is.na(col_par),
-    Tair_f = is.na(col_tair),
-    RH_f = is.na(col_rh),
-    Tsoil_f = is.na(col_tsoil),
-    SWC_f = is.na(col_swc),
-    VPD_f = is.na(col_vpd),
-    Precip = is.na(col_precip)
-  )
-
-  if (any(missing_cols)) {
-    cat("\n[meteo] Предупреждение: не найдены колонки:\n")
-    cat(paste0("  - ", names(missing_cols)[missing_cols], collapse = "\n"), "\n")
-  }
-
-  meteo_kursk <- data.frame(
-    Doy = to_num(meteo_raw[[col_doy]]),
-    Date = if (!is.na(col_date)) parse_date_any(meteo_raw[[col_date]]) else as.Date(NA),
-    PAR = if (!is.na(col_par)) to_num(meteo_raw[[col_par]]) else NA_real_,
-    Tair = if (!is.na(col_tair)) to_num(meteo_raw[[col_tair]]) else NA_real_,
-    RH = if (!is.na(col_rh)) to_num(meteo_raw[[col_rh]]) else NA_real_,
-    Tsoil = if (!is.na(col_tsoil)) to_num(meteo_raw[[col_tsoil]]) else NA_real_,
-    SWC = if (!is.na(col_swc)) to_num(meteo_raw[[col_swc]]) else NA_real_,
-    VPD = if (!is.na(col_vpd)) to_num(meteo_raw[[col_vpd]]) else NA_real_,
-    Precip = if (!is.na(col_precip)) to_num(meteo_raw[[col_precip]]) else NA_real_
-  )
-
-  meteo_kursk <- meteo_kursk %>%
-    filter(is.finite(Doy)) %>%
-    arrange(Doy)
-
-  need_rh <- !has_values(meteo_kursk$RH)
-  need_vpd <- !has_values(meteo_kursk$VPD)
-  fill_rh <- any(!is.finite(meteo_kursk$RH))
-  fill_vpd <- any(!is.finite(meteo_kursk$VPD))
-  need_swc <- !has_values(meteo_kursk$SWC)
-  need_tsoil <- !has_values(meteo_kursk$Tsoil)
-  prefer_swc_20 <- TRUE
-  prefer_tsoil_20 <- TRUE
-
-  if (need_rh || need_vpd || fill_rh || fill_vpd || need_swc || need_tsoil ||
-      prefer_swc_20 || prefer_tsoil_20) {
-    meteo_half_file <- "Kursk_data_half_our.csv"
-    if (file.exists(meteo_half_file)) {
-      meteo_half_raw <- data.table::fread(meteo_half_file, encoding = "UTF-8")
-      names(meteo_half_raw) <- trimws(names(meteo_half_raw))
-      nm_half <- names(meteo_half_raw)
-
-      col_dt <- pick_first_present(nm_half, c("DateTime", "datetime", "date_time", "timestamp"))
-      col_rh_hh <- pick_first_present(nm_half, c("rH_f", "RH_f", "rh_f"))
-      col_vpd_hh <- pick_first_present(nm_half, c("VPD_f", "vpd_f"))
-      col_swc_20 <- pick_first_present(nm_half, c("SWC_avg_20cm_Avg", "swc_avg_20cm_avg"))
-      col_swc_10 <- pick_first_present(nm_half, c("SWC_avg_10cm_Avg", "swc_avg_10cm_avg"))
-      col_swc_50 <- pick_first_present(nm_half, c("SWC_avg_50cm_Avg", "swc_avg_50cm_avg"))
-      col_ts_20 <- pick_first_present(nm_half, c("Ts_avg_20cm_Avg", "ts_avg_20cm_avg"))
-      col_ts_50 <- pick_first_present(nm_half, c("Ts_avg_50cm_Avg", "ts_avg_50cm_avg"))
-
-      col_swc_use <- if (!is.na(col_swc_20)) col_swc_20 else if (!is.na(col_swc_10)) col_swc_10 else col_swc_50
-      col_ts_use <- if (!is.na(col_ts_20)) col_ts_20 else col_ts_50
-
-      if (is.na(col_swc_20) && !is.na(col_swc_use)) {
-        cat(sprintf("\n[meteo] SWC_avg_20cm_Avg not found, using %s.\n", col_swc_use))
-      }
-      if (is.na(col_ts_20) && !is.na(col_ts_use)) {
-        cat(sprintf("\n[meteo] Ts_avg_20cm_Avg not found, using %s.\n", col_ts_use))
-      }
-
-      if (!is.na(col_dt) && (!is.na(col_rh_hh) || !is.na(col_vpd_hh) ||
-                             !is.na(col_swc_use) || !is.na(col_ts_use))) {
-        dt_raw <- meteo_half_raw[[col_dt]]
-        dt_parsed <- suppressWarnings(lubridate::ymd_hms(dt_raw, tz = "UTC"))
-        if (all(is.na(dt_parsed))) {
-          dt_parsed <- suppressWarnings(lubridate::ymd_hm(dt_raw, tz = "UTC"))
-        }
-
-        meteo_half <- data.frame(
-          DateTime = dt_parsed,
-          RH = if (!is.na(col_rh_hh)) to_num(meteo_half_raw[[col_rh_hh]]) else NA_real_,
-          VPD = if (!is.na(col_vpd_hh)) to_num(meteo_half_raw[[col_vpd_hh]]) else NA_real_,
-          SWC = if (!is.na(col_swc_use)) to_num(meteo_half_raw[[col_swc_use]]) else NA_real_,
-          Tsoil = if (!is.na(col_ts_use)) to_num(meteo_half_raw[[col_ts_use]]) else NA_real_
-        )
-
-        mean_or_na <- function(x) if (all(!is.finite(x))) NA_real_ else mean(x, na.rm = TRUE)
-
-        meteo_half_daily <- meteo_half %>%
-          filter(!is.na(DateTime)) %>%
-          mutate(Doy = yday(DateTime)) %>%
-          group_by(Doy) %>%
-          summarise(
-            Date_hh = min(as.Date(DateTime)),
-            RH_hh = mean_or_na(RH),
-            VPD_hh = mean_or_na(VPD),
-            SWC_hh = mean_or_na(SWC),
-            Tsoil_hh = mean_or_na(Tsoil),
-            .groups = "drop"
-          )
-
-        meteo_kursk <- meteo_kursk %>%
-          left_join(meteo_half_daily, by = "Doy") %>%
-          mutate(
-            Date = dplyr::coalesce(Date_hh, Date),
-            RH = ifelse(is.finite(RH), RH, RH_hh),
-            VPD = ifelse(is.finite(VPD), VPD, VPD_hh),
-            SWC = ifelse(is.finite(SWC_hh), SWC_hh, SWC),
-            Tsoil = ifelse(is.finite(Tsoil_hh), Tsoil_hh, Tsoil)
-          ) %>%
-          select(-Date_hh, -RH_hh, -VPD_hh, -SWC_hh, -Tsoil_hh)
-      } else {
-        cat("\n[meteo] Kursk_data_half_our.csv: нет DateTime или RH/VPD колонок для заполнения.\n")
-      }
-    } else {
-      cat("\n[meteo] Файл Kursk_data_half_our.csv не найден для заполнения RH/VPD.\n")
-    }
-  }
-
-  if (!has_values(meteo_kursk$PAR)) {
-    reddy_file <- "Kursk_REddyProc_results_halfhourly.csv"
-    if (file.exists(reddy_file)) {
-      meteo_rp <- data.table::fread(reddy_file, encoding = "UTF-8")
-      names(meteo_rp) <- trimws(names(meteo_rp))
-      nm_rp <- names(meteo_rp)
-
-      col_rg_f <- pick_first_present(nm_rp, c("Rg_f", "rg_f"))
-      col_doy_rp <- pick_first_present(nm_rp, c("DoY", "DOY", "doy"))
-      col_dt_rp <- pick_first_present(nm_rp, c("DateTime", "datetime", "date_time", "timestamp"))
-
-      if (!is.na(col_rg_f) && (!is.na(col_doy_rp) || !is.na(col_dt_rp))) {
-        rg_f <- to_num(meteo_rp[[col_rg_f]])
-        if (!is.na(col_doy_rp)) {
-          doy_vals <- to_num(meteo_rp[[col_doy_rp]])
-        } else {
-          dt_raw <- meteo_rp[[col_dt_rp]]
-          dt_parsed <- suppressWarnings(lubridate::ymd_hms(dt_raw, tz = "UTC"))
-          if (all(is.na(dt_parsed))) {
-            dt_parsed <- suppressWarnings(lubridate::ymd_hm(dt_raw, tz = "UTC"))
-          }
-          doy_vals <- yday(dt_parsed)
-        }
-
-        ppfd_f <- bigleaf::Rg.to.PPFD(rg_f)
-        meteo_ppfd_daily <- data.frame(Doy = doy_vals, PAR_f = ppfd_f) %>%
-          filter(is.finite(Doy)) %>%
-          group_by(Doy) %>%
-          summarise(PAR_f = mean(PAR_f, na.rm = TRUE), .groups = "drop")
-
-        meteo_kursk <- meteo_kursk %>%
-          left_join(meteo_ppfd_daily, by = "Doy") %>%
-          mutate(PAR = ifelse(is.finite(PAR), PAR, PAR_f)) %>%
-          select(-PAR_f)
-      } else {
-        cat("\n[meteo] Kursk_REddyProc_results_halfhourly.csv: missing Rg_f or DoY/DateTime for PPFD_f.\n")
-      }
-    } else {
-      cat("\n[meteo] Kursk_REddyProc_results_halfhourly.csv not found for PPFD_f.\n")
-    }
-  }
-
-  meteo_kursk <- meteo_kursk %>%
-    mutate(
-      Tsoil = gap_fill_by_doy(Doy, Tsoil),
-      SWC = gap_fill_by_doy(Doy, SWC)
-    )
-
-  if (has_values(meteo_kursk$SWC)) {
-    swc_max <- suppressWarnings(max(meteo_kursk$SWC, na.rm = TRUE))
-    if (is.finite(swc_max) && swc_max <= 1.5) {
-      meteo_kursk$SWC <- meteo_kursk$SWC * 100
-    }
-  }
+# Use half-hourly gap-filled data from Results for plotting
+if (exists("Results") && nrow(Results) > 0 && exists("kursk_data")) {
+  cat("\n[meteo] Подготовка графиков из получасовых данных после gap-filling...\n")
 
   # Calculate VPD from Tair and RH using Tetens formula
   calc_vpd <- function(temp, rh) {
@@ -2158,20 +1936,13 @@ if (file.exists(meteo_file_kursk)) {
     return(vpd)
   }
 
-  # Recalculate VPD from Tair and RH
-  if (has_values(meteo_kursk$Tair) && has_values(meteo_kursk$RH)) {
-    meteo_kursk$VPD <- calc_vpd(meteo_kursk$Tair, meteo_kursk$RH)
-    cat("\n[meteo] VPD recalculated from Tair and RH using Tetens formula\n")
-  }
-
-  # Savitzky-Golay filter function
-  sg_filter <- function(x, window = 11, order = 3) {
+  # Savitzky-Golay filter function for half-hourly data
+  sg_filter <- function(x, window = 21, order = 3) {
     # Remove NA values for filtering
     x_clean <- x[is.finite(x)]
     if (length(x_clean) < window) return(x)
 
     # Apply Savitzky-Golay filter using signal package
-    # If signal package not available, fall back to simple smoothing
     tryCatch({
       require(signal, quietly = TRUE)
       x_filtered <- rep(NA_real_, length(x))
@@ -2186,23 +1957,58 @@ if (file.exists(meteo_file_kursk)) {
     })
   }
 
+  # Prepare half-hourly meteo data from Results
+  meteo_halfhourly <- data.frame(
+    DateTime = Results$DateTime,
+    DoY = yday(Results$DateTime),
+    Tair = as.numeric(Results$Tair_f),
+    RH = as.numeric(Results$rH_f),
+    Tsoil = as.numeric(Results$Tsoil_f),
+    PPFD = as.numeric(Results$PPFD),
+    Precip = as.numeric(Results$Precip)
+  )
+
+  # Add SWC from original kursk_data
+  if ("SWC_1" %in% names(kursk_data) && nrow(kursk_data) >= nrow(meteo_halfhourly)) {
+    meteo_halfhourly$SWC <- as.numeric(kursk_data$SWC_1[1:nrow(meteo_halfhourly)])
+    # Convert SWC to percentage if needed
+    swc_max <- suppressWarnings(max(meteo_halfhourly$SWC, na.rm = TRUE))
+    if (is.finite(swc_max) && swc_max <= 1.5) {
+      meteo_halfhourly$SWC <- meteo_halfhourly$SWC * 100
+    }
+  } else {
+    meteo_halfhourly$SWC <- NA_real_
+  }
+
+  # Calculate VPD from Tair and RH
+  meteo_halfhourly$VPD <- calc_vpd(meteo_halfhourly$Tair, meteo_halfhourly$RH)
+
   # Filter by vegetation period (DoY 115-226 for Kursk 2013)
   veg_start <- 115
   veg_end <- 226
 
-  meteo_kursk_veg <- meteo_kursk %>%
-    filter(Doy >= veg_start & Doy <= veg_end) %>%
+  meteo_halfhourly_veg <- meteo_halfhourly %>%
+    filter(DoY >= veg_start & DoY <= veg_end) %>%
     mutate(
-      PAR_smooth = sg_filter(PAR, window = 11, order = 3),
-      Tair_smooth = sg_filter(Tair, window = 11, order = 3),
-      RH_smooth = sg_filter(RH, window = 11, order = 3),
-      Tsoil_smooth = sg_filter(Tsoil, window = 11, order = 3),
-      SWC_smooth = sg_filter(SWC, window = 11, order = 3),
-      VPD_smooth = sg_filter(VPD, window = 11, order = 3)
+      PPFD_smooth = sg_filter(PPFD, window = 21, order = 3),
+      Tair_smooth = sg_filter(Tair, window = 21, order = 3),
+      RH_smooth = sg_filter(RH, window = 21, order = 3),
+      Tsoil_smooth = sg_filter(Tsoil, window = 21, order = 3),
+      SWC_smooth = sg_filter(SWC, window = 21, order = 3),
+      VPD_smooth = sg_filter(VPD, window = 21, order = 3),
+      Date = as.Date(DateTime)
     )
 
+  # Create daily precipitation sums for plot
+  daily_precip <- meteo_halfhourly_veg %>%
+    group_by(Date) %>%
+    summarise(Precip_daily = sum(Precip, na.rm = TRUE), .groups = "drop")
+
+  cat(sprintf("[meteo] Подготовлено %d получасовых точек для графиков\n", nrow(meteo_halfhourly_veg)))
+  cat(sprintf("[meteo] Подготовлено %d дневных сумм осадков\n", nrow(daily_precip)))
+
   # Setup x-axis scale with dates
-  x_scale <- scale_x_date(date_breaks = "2 weeks", date_labels = "%d.%m")
+  x_scale <- scale_x_datetime(date_breaks = "2 weeks", date_labels = "%d.%m")
   x_lab <- "Дата"
 
   # Common theme for all plots
@@ -2214,59 +2020,63 @@ if (file.exists(meteo_file_kursk)) {
     )
 
   # 1. Temperature (Tair)
-  p_tair <- ggplot(meteo_kursk_veg, aes(x = Date)) +
-    geom_point(aes(y = Tair), color = "grey50", size = 1, alpha = 0.5) +
+  p_tair <- ggplot(meteo_halfhourly_veg, aes(x = DateTime)) +
+    geom_point(aes(y = Tair), color = "grey50", size = 0.3, alpha = 0.3) +
     geom_line(aes(y = Tair_smooth), color = "#D55E00", linewidth = 0.8, na.rm = TRUE) +
     labs(y = expression("Температура воздуха ("*degree*C*")")) +
     x_scale +
     plot_theme
 
   # 2. VPD (in kPa)
-  p_vpd <- ggplot(meteo_kursk_veg, aes(x = Date)) +
-    geom_point(aes(y = VPD), color = "grey50", size = 1, alpha = 0.5) +
+  p_vpd <- ggplot(meteo_halfhourly_veg, aes(x = DateTime)) +
+    geom_point(aes(y = VPD), color = "grey50", size = 0.3, alpha = 0.3) +
     geom_line(aes(y = VPD_smooth), color = "orange", linewidth = 0.8, na.rm = TRUE) +
     labs(y = "VPD (кПа)") +
     x_scale +
     plot_theme
 
   # 3. PPFD
-  p_ppfd <- ggplot(meteo_kursk_veg, aes(x = Date)) +
-    geom_point(aes(y = PAR), color = "grey50", size = 1, alpha = 0.5) +
-    geom_line(aes(y = PAR_smooth), color = "purple", linewidth = 0.8, na.rm = TRUE) +
+  p_ppfd <- ggplot(meteo_halfhourly_veg, aes(x = DateTime)) +
+    geom_point(aes(y = PPFD), color = "grey50", size = 0.3, alpha = 0.3) +
+    geom_line(aes(y = PPFD_smooth), color = "purple", linewidth = 0.8, na.rm = TRUE) +
     labs(y = expression("PPFD (мкмоль м"^-2~"с"^-1*")")) +
     x_scale +
     plot_theme
 
   # 4. Soil Temperature
-  p_tsoil <- ggplot(meteo_kursk_veg, aes(x = Date)) +
-    geom_point(aes(y = Tsoil), color = "grey50", size = 1, alpha = 0.5) +
+  p_tsoil <- ggplot(meteo_halfhourly_veg, aes(x = DateTime)) +
+    geom_point(aes(y = Tsoil), color = "grey50", size = 0.3, alpha = 0.3) +
     geom_line(aes(y = Tsoil_smooth), color = "brown", linewidth = 0.8, na.rm = TRUE) +
     labs(y = expression("Температура почвы ("*degree*C*")")) +
     x_scale +
     plot_theme
 
   # 5. Soil Water Content
-  p_swc <- ggplot(meteo_kursk_veg, aes(x = Date)) +
-    geom_point(aes(y = SWC), color = "grey50", size = 1, alpha = 0.5, na.rm = TRUE) +
+  p_swc <- ggplot(meteo_halfhourly_veg, aes(x = DateTime)) +
+    geom_point(aes(y = SWC), color = "grey50", size = 0.3, alpha = 0.3, na.rm = TRUE) +
     geom_line(aes(y = SWC_smooth), color = "cyan", linewidth = 0.8, na.rm = TRUE) +
     labs(y = "Влажность почвы (%)", x = "Дата") +
     x_scale +
     plot_theme +
     theme(axis.title.x = element_text())
 
-  # 6. Precipitation with RH (Relative Humidity) on secondary axis
+  # 6. Precipitation with RH (Relative Humidity)
+  # Combine daily precipitation with half-hourly RH
+  meteo_with_daily_precip <- meteo_halfhourly_veg %>%
+    left_join(daily_precip, by = "Date")
+
   # Scale precipitation for dual axis
-  rh_max <- suppressWarnings(max(meteo_kursk_veg$RH_smooth, na.rm = TRUE))
-  precip_max <- suppressWarnings(max(meteo_kursk_veg$Precip, na.rm = TRUE))
+  rh_max <- suppressWarnings(max(meteo_with_daily_precip$RH_smooth, na.rm = TRUE))
+  precip_max <- suppressWarnings(max(meteo_with_daily_precip$Precip_daily, na.rm = TRUE))
   scale_factor <- if (is.finite(rh_max) && is.finite(precip_max) && precip_max > 0) {
     rh_max / precip_max * 0.8
   } else {
     1
   }
 
-  p_precip <- ggplot(meteo_kursk_veg, aes(x = Date)) +
-    geom_col(aes(y = Precip * scale_factor), fill = "steelblue", alpha = 0.7, width = 1) +
-    geom_point(aes(y = RH), color = "grey50", size = 1, alpha = 0.5, na.rm = TRUE) +
+  p_precip <- ggplot(meteo_with_daily_precip, aes(x = DateTime)) +
+    geom_col(aes(y = Precip_daily * scale_factor), fill = "steelblue", alpha = 0.7, width = 1800) +
+    geom_point(aes(y = RH), color = "grey50", size = 0.3, alpha = 0.3, na.rm = TRUE) +
     geom_line(aes(y = RH_smooth), color = "black", linewidth = 0.8, na.rm = TRUE) +
     scale_y_continuous(
       name = "Осадки (мм)",
@@ -2293,5 +2103,6 @@ if (file.exists(meteo_file_kursk)) {
 
   cat("\n[meteo] Графики метеоусловий сохранены: Kursk_meteo_combined.png\n")
 } else {
-  cat("\n[meteo] Файл kurskfilled.csv не найден. Построение метеографиков пропущено.\n")
+  cat("\n[meteo] Results или kursk_data не найдены. Построение метеографиков пропущено.\n")
 }
+
