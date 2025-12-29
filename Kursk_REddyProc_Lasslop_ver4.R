@@ -1957,27 +1957,38 @@ if (exists("Results") && nrow(Results) > 0 && exists("kursk_data")) {
     })
   }
 
+  # Check which columns are available in Results
+  cat(sprintf("[meteo] Доступные столбцы в Results: %s\n",
+              paste(names(Results)[grepl("Tair|rH|Tsoil|PPFD|Precip", names(Results))], collapse = ", ")))
+
   # Prepare half-hourly meteo data from Results
+  # Use gap-filled columns (with _f suffix) where available
   meteo_halfhourly <- data.frame(
     DateTime = Results$DateTime,
-    DoY = yday(Results$DateTime),
-    Tair = as.numeric(Results$Tair_f),
-    RH = as.numeric(Results$rH_f),
-    Tsoil = as.numeric(Results$Tsoil_f),
-    PPFD = as.numeric(Results$PPFD),
-    Precip = as.numeric(Results$Precip)
+    DoY = Results$DoY,
+    Tair = as.numeric(if("Tair_f" %in% names(Results)) Results$Tair_f else Results$Tair),
+    RH = as.numeric(if("rH_f" %in% names(Results)) Results$rH_f else NA),
+    Tsoil = as.numeric(if("Tsoil_f" %in% names(Results)) Results$Tsoil_f else Results$Tsoil),
+    PPFD = as.numeric(if("PPFD" %in% names(Results)) Results$PPFD else NA),
+    Precip = as.numeric(if("Precip" %in% names(Results)) Results$Precip else NA)
   )
 
-  # Add SWC from original kursk_data
-  if ("SWC_1" %in% names(kursk_data) && nrow(kursk_data) >= nrow(meteo_halfhourly)) {
+  # Add SWC - prefer gap-filled from Results, fallback to original kursk_data
+  if ("SWC_f" %in% names(Results)) {
+    meteo_halfhourly$SWC <- as.numeric(Results$SWC_f)
+    cat("[meteo] Using SWC_f from Results (gap-filled)\n")
+  } else if ("SWC_1" %in% names(kursk_data) && nrow(kursk_data) >= nrow(meteo_halfhourly)) {
     meteo_halfhourly$SWC <- as.numeric(kursk_data$SWC_1[1:nrow(meteo_halfhourly)])
-    # Convert SWC to percentage if needed
-    swc_max <- suppressWarnings(max(meteo_halfhourly$SWC, na.rm = TRUE))
-    if (is.finite(swc_max) && swc_max <= 1.5) {
-      meteo_halfhourly$SWC <- meteo_halfhourly$SWC * 100
-    }
+    cat("[meteo] Using SWC_1 from kursk_data (original)\n")
   } else {
     meteo_halfhourly$SWC <- NA_real_
+    cat("[meteo] SWC not available\n")
+  }
+
+  # Convert SWC to percentage if needed
+  swc_max <- suppressWarnings(max(meteo_halfhourly$SWC, na.rm = TRUE))
+  if (is.finite(swc_max) && swc_max <= 1.5) {
+    meteo_halfhourly$SWC <- meteo_halfhourly$SWC * 100
   }
 
   # Calculate VPD from Tair and RH
