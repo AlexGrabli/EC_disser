@@ -1999,8 +1999,8 @@ if (exists("Results") && nrow(Results) > 0 && exists("kursk_data")) {
   veg_end <- 226
 
   meteo_halfhourly_veg <- meteo_halfhourly %>%
-    filter(DoY >= veg_start & DoY <= veg_end) %>%
-    mutate(
+    dplyr::filter(DoY >= veg_start & DoY <= veg_end) %>%
+    dplyr::mutate(
       PPFD_smooth = sg_filter(PPFD, window = 21, order = 3),
       Tair_smooth = sg_filter(Tair, window = 21, order = 3),
       RH_smooth = sg_filter(RH, window = 21, order = 3),
@@ -2012,8 +2012,8 @@ if (exists("Results") && nrow(Results) > 0 && exists("kursk_data")) {
 
   # Create daily precipitation sums for plot
   daily_precip <- meteo_halfhourly_veg %>%
-    group_by(Date) %>%
-    summarise(Precip_daily = sum(Precip, na.rm = TRUE), .groups = "drop")
+    dplyr::group_by(Date) %>%
+    dplyr::summarise(Precip_daily = sum(Precip, na.rm = TRUE), .groups = "drop")
 
   cat(sprintf("[meteo] Подготовлено %d получасовых точек для графиков\n", nrow(meteo_halfhourly_veg)))
   cat(sprintf("[meteo] Подготовлено %d дневных сумм осадков\n", nrow(daily_precip)))
@@ -2074,7 +2074,7 @@ if (exists("Results") && nrow(Results) > 0 && exists("kursk_data")) {
   # 6. Precipitation with RH (Relative Humidity)
   # Combine daily precipitation with half-hourly RH
   meteo_with_daily_precip <- meteo_halfhourly_veg %>%
-    left_join(daily_precip, by = "Date")
+    dplyr::left_join(daily_precip, by = "Date")
 
   # Scale precipitation for dual axis
   rh_max <- suppressWarnings(max(meteo_with_daily_precip$RH_smooth, na.rm = TRUE))
