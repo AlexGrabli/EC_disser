@@ -1937,7 +1937,7 @@ if (exists("Results") && nrow(Results) > 0 && exists("kursk_data")) {
   }
 
   # Savitzky-Golay filter function for half-hourly data
-  sg_filter <- function(x, window = 21, order = 3) {
+  sg_filter <- function(x, window = 101, order = 2) {
     # Remove NA values for filtering
     x_clean <- x[is.finite(x)]
     if (length(x_clean) < window) return(x)
@@ -1954,6 +1954,31 @@ if (exists("Results") && nrow(Results) > 0 && exists("kursk_data")) {
     }, error = function(e) {
       # Fallback to moving average if signal package not available
       zoo::rollmean(x, k = window, fill = NA, na.rm = TRUE)
+    })
+  }
+
+  # Special filter for PPFD - only filter daytime values (PPFD > 10)
+  sg_filter_ppfd <- function(x, window = 101, order = 2, threshold = 10) {
+    x_filtered <- rep(NA_real_, length(x))
+
+    # Identify daytime indices (PPFD > threshold)
+    daytime_idx <- which(is.finite(x) & x > threshold)
+    nighttime_idx <- which(is.finite(x) & x <= threshold)
+
+    if (length(daytime_idx) < window) {
+      # Not enough daytime data, return original
+      return(x)
+    }
+
+    # Apply filter only to daytime values
+    tryCatch({
+      require(signal, quietly = TRUE)
+      x_filtered[daytime_idx] <- signal::sgolayfilt(x[daytime_idx], p = order, n = window)
+      # Keep nighttime values as zero
+      x_filtered[nighttime_idx] <- 0
+      x_filtered
+    }, error = function(e) {
+      x
     })
   }
 
@@ -2001,12 +2026,12 @@ if (exists("Results") && nrow(Results) > 0 && exists("kursk_data")) {
   meteo_halfhourly_veg <- meteo_halfhourly %>%
     dplyr::filter(DoY >= veg_start & DoY <= veg_end) %>%
     dplyr::mutate(
-      PPFD_smooth = sg_filter(PPFD, window = 21, order = 3),
-      Tair_smooth = sg_filter(Tair, window = 21, order = 3),
-      RH_smooth = sg_filter(RH, window = 21, order = 3),
-      Tsoil_smooth = sg_filter(Tsoil, window = 21, order = 3),
-      SWC_smooth = sg_filter(SWC, window = 21, order = 3),
-      VPD_smooth = sg_filter(VPD, window = 21, order = 3),
+      PPFD_smooth = sg_filter_ppfd(PPFD, window = 101, order = 2, threshold = 10),
+      Tair_smooth = sg_filter(Tair, window = 101, order = 2),
+      RH_smooth = sg_filter(RH, window = 101, order = 2),
+      Tsoil_smooth = sg_filter(Tsoil, window = 101, order = 2),
+      SWC_smooth = sg_filter(SWC, window = 101, order = 2),
+      VPD_smooth = sg_filter(VPD, window = 101, order = 2),
       Date = as.Date(DateTime)
     )
 
