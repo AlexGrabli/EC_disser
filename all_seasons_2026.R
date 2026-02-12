@@ -151,6 +151,21 @@ to_num <- function(x){
   x <- gsub(",", ".", trimws(x), fixed = TRUE)
   suppressWarnings(as.numeric(x))
 }
+safe_num <- to_num
+
+pick_first_present <- function(nm, candidates){
+  cand <- intersect(candidates, nm)
+  if (length(cand)) cand[1] else NA_character_
+}
+
+first_or_stop <- function(df, candidates, label = "колонку"){
+  col <- pick_first_present(names(df), candidates)
+  if (is.na(col)) stop(sprintf("Не нашли %s. Искали: %s",
+                               label, paste(candidates, collapse=", ")))
+  col
+}
+
+fmt_num <- function(x) ifelse(is.finite(x), formatC(x, format="f", digits=2), "н/д")
 
 pick_col <- function(nm, pats){
   for (p in pats){ 
@@ -961,7 +976,7 @@ create_meteo_plots <- function(biomet_year, year, bounds, precip_ts = NULL,
   })
 }
 
-base_dir <- "I:/ДИССЕР/Rscripts/all_seasons+kursk"
+base_dir <- "."
 biomet_2013_path <- file.path(base_dir, "biomet2013.csv")
 biomet_2016_path <- file.path(base_dir, "2016BiomB.csv")
 precip_2016_path <- file.path(base_dir, "2016_precip.csv")
@@ -1110,9 +1125,8 @@ plot_flux <- function(flux){
       labs(title = paste("Среднесуточные значения", flux),
            x = "Часы суток", y = "µmol CO₂ m⁻² s⁻¹") +
       theme_base
-  }
   return(p)
-            
+}
 
 p_NEE  <- plot_flux("NEE")
 p_GPP  <- plot_flux("GPP")
@@ -1128,416 +1142,6 @@ ggsave("compare_diurnal_Reco_2013_2016_2023.png", p_Reco, width=12, height=8, dp
 
 cat("\nГотово. Файлы сохранены:\n  - diurnal_summary_2013_2016_2023.csv\n  - compare_diurnal_*.png\n")
 
-# СВЕТОВЫЕ КРИВЫЕ
-
-df23$Phase_lab <- factor(df23$Phase_lab, levels = PHASE6_RU)
-# === PATCH ===
-# Добавьте этот блок ПЕРЕД первой строкой, где вызывается pick_first_present()
-# (в самое начало файла или перед секцией подготовки данных по годам).
-
-# Безопасное приведение к numeric (если у вас его нет — пригодится дальше)
-safe_num <- function(x){
-  if (is.numeric(x)) return(x)
-  if (is.factor(x))  x <- as.character(x)
-  x <- gsub(",", ".", trimws(x), fixed = TRUE)
-  suppressWarnings(as.numeric(x))
-}
-
-# Возвращает ПЕРВОЕ существующее имя столбца из заданного списка candidates.
-# Если ни один не найден — возвращает NA_character_.
-pick_first_present <- function(nm, candidates){
-  cand <- intersect(candidates, nm)
-  if (length(cand) > 0) cand[1] else NA_character_
-}
-
-# Удобная «обёртка»: сразу стопаемся с понятным сообщением,
-# если подходящая колонка не найдена.
-first_or_stop <- function(df, candidates, label = "колонку"){
-  col <- pick_first_present(names(df), candidates)
-  if (is.na(col)) {
-    stop(sprintf("Не нашли %s среди: %s\nИскали: %s",
-                 label, paste(names(df), collapse=", "),
-                 paste(candidates, collapse=", ")))
-  }
-  col
-}
-# === END PATCH ===
-# прочитаем PPFD для 2023 из вложенного файла (если PPFD уже «живой» в df23 — пропустим join)
-need_join_23 <- !("PPFD" %in% names(df23) && sum(is.finite(df23$PPFD) & df23$PPFD>10) > 100)
-if (need_join_23) {
-  pp23_path <- "fluxes_2023_biomass_mean.csv"
-  stopifnot(file.exists(pp23_path))
-  pp23_raw <- readr::read_csv(pp23_path, show_col_types = FALSE, guess_max = 1e6) %>% clean_names()
-  t_pp     <- best_time_from_candidates(pp23_raw, tz = "UTC")
-  pp_col   <- pick_first_present(names(pp23_raw), c("ppfd","ppfd_f","ppfd_fall","ppfd_orig","ppfd_mean","ppfd_u50"))
-  stopifnot(!is.na(pp_col))
-  pp23 <- tibble(datetime = t_pp, PPFD = safe_num(pp23_raw[[pp_col]])) %>%
-    filter(!is.na(datetime)) %>%
-    mutate(dt30 = floor_date(datetime, "30 minutes")) %>%
-    group_by(dt30) %>% summarise(PPFD = mean(PPFD, na.rm=TRUE), .groups="drop")
-
-  df23 <- df23 %>%
-    mutate(dt30 = floor_date(datetime, "30 minutes")) %>%
-    select(-any_of(c("PPFD","PPFD.x","PPFD.y"))) %>%
-    left_join(pp23, by="dt30") %>%
-    select(-dt30)
-}
-
-# --------------------- ГАРАНТИРОВАННОЕ приведение типов по КАЖДОМУ году ---------------------
-# Выбираем ровно ОДНУ колонку GPP и ОДНУ PPFD, приводим к numeric ДО объединения.
-
-prep_year <- function(df, year){
-  stopifnot(all(c("datetime","Phase_lab") %in% names(df)))
-  nm <- names(df)
-
-  gpp_col <- pick_first_present(nm, c("GPP","gpp","gpp_dt_u50","gpp_dt_u_star","gpp_u50","gpp_u_star_f"))
-  if (is.na(gpp_col)) stop(sprintf("(%s) Не нашли колонку GPP в df%02d", year, year))
-
-  ppfd_col <- pick_first_present(nm, c("PPFD","ppfd","PPFD_f","ppfd_f","ppfd_mean","PPFD_mean","ppfd_orig","PPFD_orig"))
-  if (is.na(ppfd_col)) stop(sprintf("(%s) Не нашли колонку PPFD в df%02d", year, year))
-
-  out <- df %>%
-    transmute(
-      Year      = as.integer(year),
-      datetime  = as.POSIXct(datetime, tz = "UTC"),
-      Phase_lab = factor(Phase_lab, levels = PHASE6_RU),
-      PPFD      = safe_num(.data[[ppfd_col]]),
-      GPP       = safe_num(.data[[gpp_col]])
-    )
-
-  # жёсткая проверка: никаких factor/character не осталось
-  stopifnot(is.numeric(out$PPFD), is.numeric(out$GPP))
-  out
-}
-
-# df13/df16 уже есть из вашего пайплайна
-stopifnot(exists("df13"), exists("df16"))
-df13$Phase_lab <- factor(df13$Phase_lab, levels = PHASE6_RU)
-df16$Phase_lab <- factor(df16$Phase_lab, levels = PHASE6_RU)
-# ---------- утилиты ----------
-safe_num <- function(x){
-  if (is.numeric(x)) return(x)
-  if (is.factor(x))  x <- as.character(x)
-  x <- gsub(",", ".", trimws(x), fixed = TRUE)
-  suppressWarnings(as.numeric(x))
-}
-
-pick_first_present <- function(nm, candidates){
-  cand <- intersect(candidates, nm)
-  if (length(cand)) cand[1] else NA_character_
-}
-
-best_time_from_candidates <- function(df, tz="UTC"){
-  nm <- names(df)
-  cand <- union(intersect(c("timestamp_msk","timestamp","datetime","date_time","date","time"), nm),
-                nm[stringr::str_detect(nm,"(date|time|stamp)")])
-  if (!length(cand)) return(rep(as.POSIXct(NA, tz=tz), nrow(df)))
-  best <- rep(as.POSIXct(NA, tz=tz), nrow(df)); best_n <- -1L
-  for (cn in cand){
-    v <- df[[cn]]; out <- rep(as.POSIXct(NA, tz=tz), length(v))
-    if (is.numeric(v) && suppressWarnings(max(v, na.rm=TRUE) > 1e9)) {
-      out <- as.POSIXct(v, origin="1970-01-01", tz=tz)
-    } else {
-      x <- as.character(v); x <- gsub("Z$","",x); x <- gsub("T"," ",x,fixed=TRUE)
-      for (f in c("%Y-%m-%d %H:%M:%S","%Y-%m-%d %H:%M",
-                  "%Y/%m/%d %H:%M:%S","%Y/%m/%d %H:%M",
-                  "%d.%m.%Y %H:%M:%S","%d.%m.%Y %H:%M",
-                  "%Y-%m-%d","%Y/%m/%d","%d.%m.%Y")){
-        out <- suppressWarnings(as.POSIXct(strptime(x, f, tz=tz)))
-        if (sum(!is.na(out))>0) break
-      }
-      if (all(is.na(out))) out <- suppressWarnings(ymd_hms(v, tz=tz, quiet=TRUE))
-      if (all(is.na(out))) out <- suppressWarnings(dmy_hms(v, tz=tz, quiet=TRUE))
-    }
-    n_ok <- sum(!is.na(out))
-    if (n_ok > best_n){ best <- out; best_n <- n_ok; if (best_n==length(v)) break }
-  }
-  best
-}
-
-force_year <- function(dt, year_ref){
-  if (all(is.na(dt))) return(dt)
-  y <- suppressWarnings(lubridate::year(dt))
-  y_med <- suppressWarnings(stats::median(y, na.rm=TRUE))
-  if (is.finite(y_med) && as.integer(round(y_med)) != year_ref) {
-    return(lubridate::update(dt, year = year_ref))
-  }
-  dt
-}
-
-# строим lookup PPFD из файла (если нет PPFD — считаем из радиации)
-build_ppfd_lookup <- function(file, year, tz_in="UTC", shift_hours=0L, rg_to_ppfd=2.04){
-  if (!file.exists(file)) stop("Нет файла: ", file)
-  raw <- readr::read_csv(file, show_col_types = FALSE, guess_max = 1e6) %>% clean_names()
-
-  t_raw <- best_time_from_candidates(raw, tz = tz_in)
-  t_raw <- force_year(t_raw, year)
-  if (shift_hours != 0L && any(!is.na(t_raw))) t_raw <- t_raw + hours(shift_hours)
-
-  # пробуем явный PPFD
-  pp_col <- pick_first_present(names(raw),
-                               c("ppfd","ppfd_f","ppfd_fall","ppfd_orig","ppfd_mean","ppfd_u50","par","par_in","parin"))
-  ppfd <- if (!is.na(pp_col)) safe_num(raw[[pp_col]]) else NA_real_
-
-  # если его нет — считаем из радиации (Rg [W m-2] → PPFD [µmol m-2 s-1])
-  if (sum(is.finite(ppfd) & ppfd>0, na.rm=TRUE) < 50) {
-    rad_col <- pick_first_present(names(raw),
-                                  c("rg","rg_f","rg_orig","sw_in","shortwave_in","kdown","pot_rad_new","pot_rad","r_global","rn_orig"))
-    if (!is.na(rad_col)) {
-      rad <- safe_num(raw[[rad_col]])
-      # конверсия 2.04 µmol/J (как в bigleaf по умолчанию)
-      ppfd <- rad * rg_to_ppfd
-    }
-  }
-
-  tibble(datetime = t_raw, PPFD = ppfd) %>%
-    filter(is.finite(datetime), is.finite(PPFD)) %>%
-    mutate(dt30 = floor_date(datetime, "30 minutes")) %>%
-    group_by(dt30) %>% summarise(PPFD = mean(PPFD, na.rm=TRUE), .groups="drop")
-}
-
-# присоединяем PPFD к df, сравнивая покрытие: берём лучшее
-attach_ppfd <- function(df, ppfd_lookup){
-  stopifnot(all(c("datetime","Phase_lab") %in% names(df)))
-  has_ppfd <- "PPFD" %in% names(df)
-  cov_old  <- if (has_ppfd) sum(is.finite(df$PPFD) & df$PPFD > 10) else 0L
-
-  df_new <- df %>%
-    mutate(dt30 = floor_date(datetime, "30 minutes")) %>%
-    left_join(ppfd_lookup, by = c("dt30")) %>%
-    select(-dt30)
-
-  # если была своя PPFD — выбираем лучшую (с большим числом дневных точек)
-  if (has_ppfd) {
-    cov_new <- sum(is.finite(df_new$PPFD.y) & df_new$PPFD.y > 10)
-    if (cov_new > cov_old) {
-      df_new <- df_new %>% transmute(across(-c(PPFD.x, PPFD.y)),
-                                     PPFD = PPFD.y)
-    } else {
-      df_new <- df_new %>% transmute(across(-c(PPFD.x, PPFD.y)),
-                                     PPFD = PPFD.x)
-    }
-  } else {
-    names(df_new)[names(df_new)=="PPFD"] <- "PPFD"
-  }
-  df_new
-}
-
-# ---------- ПРИМЕНЕНИЕ К 2013/2016 ----------
-# укажите верные пути, если отличаются
-file_2013 <- "Lasslop_2013_Complete_GapFilled.csv"
-file_2016 <- "Moscow_2016_verFin.csv"
-
-# 2013: в исходнике время в МСК → сдвигаем к UTC -3 ч
-pp2013 <- build_ppfd_lookup(file_2013, year = 2013, tz_in = "UTC", shift_hours = 0L)
-df13   <- attach_ppfd(df13, pp2013)
-
-# 2016: как правило уже локальное/UTC без сдвига
-pp2016 <- build_ppfd_lookup(file_2016, year = 2016, tz_in = "UTC", shift_hours = 0L)
-df16   <- attach_ppfd(df16, pp2016)
-
-# ---------- Диагностика покрытия ----------
-diag_pp <- bind_rows(
-  df13 %>% mutate(Year = 2013),
-  df16 %>% mutate(Year = 2016)
-) %>%
-  group_by(Year) %>%
-  summarise(
-    n = n(),
-    ppfd_non_na = sum(is.finite(PPFD)),
-    ppfd_day    = sum(PPFD > 10, na.rm=TRUE),
-    ppfd_min    = suppressWarnings(min(PPFD, na.rm=TRUE)),
-    ppfd_med    = suppressWarnings(median(PPFD, na.rm=TRUE)),
-    ppfd_max    = suppressWarnings(max(PPFD, na.rm=TRUE)),
-    .groups="drop"
-  )
-print(diag_pp)
-
-d13 <- prep_year(df13, 2013)
-d16 <- prep_year(df16, 2016)
-d23 <- prep_year(df23, 2023)
-
-# --------------------- Объединение без «обнуления» ---------------------
-# ВАЖНО: объединяем уже очищенные числовые колонки с одинаковыми именами.
-df_all <- bind_rows(d13, d16, d23)
-
-# Диагностика — убедимся, что после bind_rows всё живое:
-cat("\n[CHK] Диагностика после объединения:\n")
-print(
-  df_all %>%
-    group_by(Year) %>%
-    summarise(
-      n = n(),
-      ppfd_n = sum(is.finite(PPFD)),
-      ppfd_pos = sum(PPFD > 10, na.rm=TRUE),
-      ppfd_min = suppressWarnings(min(PPFD, na.rm=TRUE)),
-      ppfd_med = suppressWarnings(median(PPFD, na.rm=TRUE)),
-      ppfd_max = suppressWarnings(max(PPFD, na.rm=TRUE)),
-      gpp_n = sum(is.finite(GPP)),
-      gpp_min = suppressWarnings(min(GPP, na.rm=TRUE)),
-      gpp_med = suppressWarnings(median(GPP, na.rm=TRUE)),
-      gpp_max = suppressWarnings(max(GPP, na.rm=TRUE)),
-      .groups="drop"
-    )
-)
-
-# --------------------- Построение световых кривых ---------------------
-# Фильтры: дневные точки и реалистичные пределы
-light_all <- df_all %>%
-  filter(!is.na(Phase_lab),
-         is.finite(PPFD), PPFD >= 10, PPFD <= 2200,
-         is.finite(GPP),  GPP  >= 0,  GPP  <= 40)
-
-# Биннинг по PPFD для устойчивого фита и «усиков»
-bin_w <- 100
-binned <- light_all %>%
-  mutate(PPFD_bin = pmax(0, floor(PPFD/bin_w)*bin_w)) %>%
-  group_by(Year, Phase_lab, PPFD_bin) %>%
-  summarise(PPFD = mean(PPFD), GPP = mean(GPP), n = dplyr::n(), .groups="drop") %>%
-  arrange(Year, Phase_lab, PPFD)
-
-# Фит прямоугольной гиперболы y = (α β x)/(α x + β) с ограничениями
-fit_lrc_group <- function(dat){
-  dat <- arrange(dat, PPFD)
-  if (nrow(dat) < 10 || diff(range(dat$PPFD)) < 200 || var(dat$GPP) < 0.1)
-    return(tibble(alpha=NA_real_, beta=NA_real_))
-
-  # стартовые значения: наклон «внизу» + асимптотический максимум
-  low <- dat %>% filter(PPFD <= quantile(PPFD, 0.2, na.rm=TRUE))
-  a0  <- suppressWarnings(coef(lm(GPP ~ 0 + PPFD, data = low)))[1]
-  if (!is.finite(a0)) a0 <- 0.03
-  a0  <- min(max(a0, 0.005), 0.12)
-  b0  <- quantile(dat$GPP, 0.95, na.rm=TRUE); if (!is.finite(b0) || b0 <= 0) b0 <- max(dat$GPP, na.rm=TRUE)
-  b0  <- min(max(b0, 5), 40)
-
-  fit <- try(
-    nls(GPP ~ (alpha*beta*PPFD)/(alpha*PPFD + beta),
-        data = dat,
-        start = list(alpha = a0, beta = b0),
-        algorithm = "port",
-        lower = c(alpha = 1e-4, beta = 1),
-        upper = c(alpha = 0.2,  beta = 60),
-        control = nls.control(maxiter = 500, warnOnly = TRUE)),
-    silent = TRUE
-  )
-
-  if (!inherits(fit, "try-error")) {
-    co <- coef(fit); return(tibble(alpha = unname(co["alpha"]), beta = unname(co["beta"])))
-  }
-
-  # Резерв: грубый грид-поиск
-  grid_a <- c(0.005,0.01,0.02,0.03,0.05,0.08,0.12,0.2)
-  grid_b <- c(5,8,10,15,20,30,40,60)
-  best <- list(a=NA_real_, b=NA_real_, rss=Inf)
-  for (aa in grid_a){
-    for (bb in grid_b){
-      pred <- (aa*bb*dat$PPFD)/(aa*dat$PPFD + bb)
-      rss  <- sum((dat$GPP - pred)^2)
-      if (is.finite(rss) && rss < best$rss) best <- list(a=aa, b=bb, rss=rss)
-    }
-  }
-  tibble(alpha = best$a, beta = best$b)
-}
-
-coef_tbl <- binned %>%
-  group_by(Year, Phase_lab) %>%
-  group_modify(~fit_lrc_group(.x)) %>%
-  ungroup()
-
-# Сетка для кривых и сами кривые
-# 1) xmax теперь считаем по КАЖДОЙ паре (Year, Phase_lab) из фактических данных,
-#    а не по одной фазе на все годы.
-range_tbl <- light_all %>%
-  dplyr::group_by(Year, Phase_lab) %>%
-  dplyr::summarise(vmax = suppressWarnings(max(PPFD, na.rm = TRUE)), .groups = "drop") %>%
-  dplyr::mutate(
-    xmax = dplyr::case_when(
-      is.finite(vmax) & vmax > 0 ~ pmin(vmax, 2000),
-      TRUE                       ~ 500         # безопасный минимум, если данных мало
-    )
-  ) %>%
-  dplyr::select(-vmax)
-
-# 2) Кривые считаем «построчно» (rowwise), чтобы не обращаться к .y$xmax.
-curve_tbl <- coef_tbl %>%
-  dplyr::left_join(range_tbl, by = c("Year","Phase_lab")) %>%
-  dplyr::filter(is.finite(alpha), is.finite(beta), is.finite(xmax), xmax > 0) %>%
-  dplyr::rowwise() %>%
-  dplyr::mutate(
-    data = list(tibble(
-      PPFD    = seq(0, xmax, length.out = 200),
-      GPP_hat = (alpha * beta * PPFD) / (alpha * PPFD + beta)
-    ))
-  ) %>%
-  dplyr::ungroup() %>%
-  tidyr::unnest(data) %>%
-  dplyr::select(Year, Phase_lab, PPFD, GPP_hat)
-
-# 3) (Не обязательно) Проверка: нет ли пустых кривых
-if (nrow(curve_tbl) == 0L) {
-  warning("curve_tbl пуст: проверьте, что в coef_tbl есть конечные alpha/beta и в light_all есть дневные точки PPFD ≥ 10.")
-}
-
-# «Усики» (SE) для наглядности
-bins_for_plot <- light_all %>%
-  mutate(PPFD_bin = pmax(0, floor(PPFD/bin_w)*bin_w)) %>%
-  group_by(Year, Phase_lab, PPFD_bin) %>%
-  summarise(PPFD = mean(PPFD), GPP_mean = mean(GPP),
-            GPP_se = sd(GPP)/sqrt(dplyr::n()), .groups="drop") %>%
-  mutate(GPP_se = replace_na(GPP_se, 0))
-
-# Аннотации α и β
-y_top <- light_all %>%
-  group_by(Phase_lab) %>% summarise(ymax = max(GPP, na.rm=TRUE), .groups="drop")
-
-fmt_num <- function(x) ifelse(is.finite(x), formatC(x, format="f", digits=2), "н/д")
-anno <- coef_tbl %>%
-  left_join(y_top, by="Phase_lab") %>%
-  group_by(Phase_lab) %>% arrange(Year) %>%
-  mutate(y = ymax * (0.95 - 0.08*(row_number()-1)),
-         x = 30,
-         label = paste0("α = ", fmt_num(alpha), "  β = ", fmt_num(beta))) %>%
-  ungroup()
-
-# --------------------- Графики (3 варианта) ---------------------
-theme_base <- theme_bw(base_size=12) +
-  theme(panel.grid.minor=element_blank(),
-        panel.grid.major=element_line(linewidth=0.2, colour="grey85"),
-        strip.background=element_rect(fill="grey95", colour="grey80"),
-        plot.title=element_text(face="bold", hjust=0),
-        legend.position="bottom")
-
-# ===================== PATCH: фиксированные подписи α и β =====================
-# Делает подписи в КАЖДОМ фасете вверху слева, на общих Y-осях.
-# Замените ваш блок расчёта `anno` и построения графиков на этот.
-
-# 0) Общая шкала Y (как раньше)
-y_max_fixed <- suppressWarnings(max(c(light_all$GPP, curve_tbl$GPP_hat), na.rm = TRUE))
-if (!is.finite(y_max_fixed) || y_max_fixed <= 0) y_max_fixed <- 10
-y_breaks <- pretty(c(0, y_max_fixed), n = 6)
-y_max_fixed <- max(y_breaks)
-
-# 1) Формат чисел
-fmt_num <- function(x) ifelse(is.finite(x), formatC(x, format="f", digits=2), "н/д")
-
-# 2) Фиксируем позиции подписей: слева сверху в каждом фасете
-year_levels <- c(2013, 2016, 2023)             # порядок строк-подписей
-top_pad     <- y_max_fixed * 0.04              # отступ сверху
-y_step      <- max(y_max_fixed * 0.08, 1.0)    # шаг между годами (минимум 1)
-x_pad       <- 30                              # отступ слева по PPFD
-
-anno_fixed <- coef_tbl %>%
-  mutate(Year = factor(Year, levels = year_levels)) %>%
-  group_by(Phase_lab) %>%
-  arrange(Year) %>%
-  mutate(
-    x     = x_pad,
-    y     = y_max_fixed - top_pad - (row_number()-1) * y_step,
-    label = paste0("α = ", fmt_num(alpha), "  β = ", fmt_num(beta))
-  ) %>%
-  ungroup()
-
-stopifnot(exists("light_all"), exists("curve_tbl"), exists("coef_tbl"))
 
 # ================================================================
 # Сравнение световых кривых (2013, 2016, 2023) с формулой:
@@ -1548,39 +1152,6 @@ stopifnot(exists("light_all"), exists("curve_tbl"), exists("coef_tbl"))
 #            GPP (или аналоги) и PPFD_f/PPFD (или аналоги).
 # Выход: три графика и таблица коэффициентов α, β по годам и фазам.
 # ================================================================
-
-suppressPackageStartupMessages({
-  library(tidyverse)
-  library(lubridate)
-})
-
-# --- bigleaf для конверсии PPFD -> Rg ---
-if (!requireNamespace("bigleaf", quietly = TRUE)) {
-  install.packages("bigleaf", repos = "https://cloud.r-project.org")
-}
-library(bigleaf)
-
-# ---------- настройки ----------
-PHASE6_RU <- c("Всходы","Кущение","Выход в трубку","Колошение","Цветение","Созревание")
-pal_year  <- c(`2013`="#1b9e77", `2016`="#d95f02", `2023`="#7570b3")
-
-# ---------- утилиты ----------
-safe_num <- function(x){
-  if (is.numeric(x)) return(x)
-  if (is.factor(x))  x <- as.character(x)
-  x <- gsub(",", ".", trimws(x), fixed = TRUE)
-  suppressWarnings(as.numeric(x))
-}
-pick_first_present <- function(nm, candidates){
-  cand <- intersect(candidates, nm)
-  if (length(cand)) cand[1] else NA_character_
-}
-first_or_stop <- function(df, candidates, label = "колонку"){
-  col <- pick_first_present(names(df), candidates)
-  if (is.na(col)) stop(sprintf("Не нашли %s. Искали: %s",
-                               label, paste(candidates, collapse=", ")))
-  col
-}
 
 # ---------- стандартизация по году: берём РОВНО одну PPFD и одну GPP ----------
 prep_year_ppfd_rg <- function(df, year){
@@ -1677,7 +1248,8 @@ light_all <- bind_rows(d13, d16, d23)
 coef_tbl <- light_all %>%
   group_by(Year, Phase_lab) %>%
   group_modify(~fit_lrc_rg(.x)) %>%
-  ungroup()
+  ungroup() %>%
+  mutate(GPPmax = beta)
 
 # ---------- кривые: строим по PPFD-сетке, как просили (через Rg из PPFD) ----------
 # xmax_PPFD — индивидуально для каждой пары «год × фаза»
@@ -1710,35 +1282,14 @@ bins_tbl <- light_all %>%
   summarise(GPP_mean = mean(GPP), GPP_se = sd(GPP)/sqrt(dplyr::n()), .groups="drop") %>%
   mutate(GPP_se = replace_na(GPP_se, 0))
 
-# ---------- аннотации α и β ----------
-y_top <- light_all %>% group_by(Phase_lab) %>% summarise(ymax = max(GPP, na.rm=TRUE), .groups="drop")
-fmt_num <- function(x) ifelse(is.finite(x), formatC(x, format="f", digits=2), "н/д")
-anno <- coef_tbl %>%
-  left_join(y_top, by="Phase_lab") %>%
-  group_by(Phase_lab) %>% arrange(Year) %>%
-  mutate(y = ymax * (0.95 - 0.08*(row_number()-1)),
-         x = 30,
-         label = paste0("α = ", fmt_num(alpha), "  β = ", fmt_num(beta))) %>%
-  ungroup()
-
-# ---------- графики ----------
-theme_base <- theme_bw(base_size=12) +
-  theme(panel.grid.minor=element_blank(),
-        panel.grid.major=element_line(linewidth=0.2, colour="grey85"),
-        strip.background=element_rect(fill="grey95", colour="grey80"),
-        plot.title=element_text(face="bold", hjust=0),
-        legend.position="bottom")
-
-# 0) Общая шкала Y (как раньше)
+# ---------- аннотации α, GPPmax (= β) ----------
+# 0) Общая шкала Y
 y_max_fixed <- suppressWarnings(max(c(light_all$GPP, curve_tbl$GPP_hat), na.rm = TRUE))
 if (!is.finite(y_max_fixed) || y_max_fixed <= 0) y_max_fixed <- 10
 y_breaks <- pretty(c(0, y_max_fixed), n = 6)
 y_max_fixed <- max(y_breaks)
 
-# 1) Формат чисел
-fmt_num <- function(x) ifelse(is.finite(x), formatC(x, format="f", digits=2), "н/д")
-
-# 2) Фиксируем позиции подписей: слева сверху в каждом фасете
+# 1) Фиксируем позиции подписей: слева сверху в каждом фасете
 year_levels <- c(2013, 2016, 2023)             # порядок строк-подписей
 top_pad     <- y_max_fixed * 0.04              # отступ сверху
 y_step      <- max(y_max_fixed * 0.08, 1.0)    # шаг между годами (минимум 1)
@@ -1751,7 +1302,7 @@ anno_fixed <- coef_tbl %>%
   mutate(
     x     = x_pad,
     y     = y_max_fixed - top_pad - (row_number()-1) * y_step,
-    label = paste0("α = ", fmt_num(alpha), "  β = ", fmt_num(beta))
+    label = paste0("α = ", fmt_num(alpha), "  GPPmax = ", fmt_num(beta))
   ) %>%
   ungroup()
 
@@ -1804,14 +1355,15 @@ print(p_whisk); print(p_lines_pts); print(p_lines_only)
 # ggsave("lightRG_lines_points_fixedY.png", p_lines_pts,  width=12, height=8, dpi=300, bg="white")
 # ggsave("lightRG_lines_only_fixedY.png",   p_lines_only, width=12, height=8, dpi=300, bg="white")
 
-readr::write_csv(coef_tbl %>% arrange(Phase_lab, Year), "lightRG_coefficients_by_year_phase.csv")
+readr::write_csv(coef_tbl %>% arrange(Phase_lab, Year),
+                 "lightRG_coefficients_by_year_phase.csv")
 
 # ==============================================================================
-# ПОДРОБНЫЙ РАСЧЕТ И ВЫВОД КОЭФФИЦИЕНТОВ α И β ДЛЯ СВЕТОВЫХ КРИВЫХ
+# ПОДРОБНЫЙ РАСЧЕТ КОЭФФИЦИЕНТОВ α И GPPmax (= β) ДЛЯ СВЕТОВЫХ КРИВЫХ
 # ==============================================================================
 
 cat("\n========================================\n")
-cat("РАСЧЕТ КОЭФФИЦИЕНТОВ α И β ДЛЯ СВЕТОВЫХ КРИВЫХ\n")
+cat("РАСЧЕТ КОЭФФИЦИЕНТОВ α И GPPmax (= beta) ДЛЯ СВЕТОВЫХ КРИВЫХ\n")
 cat("========================================\n\n")
 
 # Функция для расчета коэффициентов с дополнительной статистикой и доверительными интервалами
@@ -1993,19 +1545,24 @@ calculate_phase_duration <- function(year, phase_ru) {
   return(as.integer(duration))
 }
 
-# Добавляем продолжительность фенофаз и английские названия
+# Добавляем продолжительность фенофаз, английские названия и GPPmax
 coef_tbl_detailed <- coef_tbl_detailed %>%
   rowwise() %>%
   mutate(
     Phase_duration_days = calculate_phase_duration(Year, as.character(Phase_lab)),
-    Phase_en = factor(as.character(Phase_lab), 
-                      levels = PHASE6_RU, 
-                      labels = PHASE6_EN)
+    Phase_en = factor(as.character(Phase_lab),
+                      levels = PHASE6_RU,
+                      labels = PHASE6_EN),
+    GPPmax = beta,
+    GPPmax_ci5_lower = beta_ci5_lower,
+    GPPmax_ci5_upper = beta_ci5_upper,
+    GPPmax_ci1_lower = beta_ci1_lower,
+    GPPmax_ci1_upper = beta_ci1_upper
   ) %>%
   ungroup()
 
 # Вывод результатов в консоль
-cat("Коэффициенты α и β для световых кривых по годам и фенофазам:\n\n")
+cat("Коэффициенты α, GPPmax (= β) для световых кривых по годам и фенофазам:\n\n")
 
 # Форматированный вывод
 coef_tbl_detailed %>%
@@ -2013,14 +1570,14 @@ coef_tbl_detailed %>%
     Phase_lab = as.character(Phase_lab),
     Phase_en = as.character(Phase_en),
     alpha_fmt = ifelse(is.finite(alpha), sprintf("%.4f", alpha), "н/д"),
-    beta_fmt = ifelse(is.finite(beta), sprintf("%.2f", beta), "н/д"),
+    GPPmax_fmt = ifelse(is.finite(GPPmax), sprintf("%.2f", GPPmax), "н/д"),
     r2_fmt = ifelse(is.finite(r2), sprintf("%.3f", r2), "н/д"),
     rmse_fmt = ifelse(is.finite(rmse), sprintf("%.3f", rmse), "н/д"),
-    duration_fmt = ifelse(is.finite(Phase_duration_days), 
+    duration_fmt = ifelse(is.finite(Phase_duration_days),
                           sprintf("%d дн.", Phase_duration_days), "н/д")
   ) %>%
   arrange(Year, Phase_lab) %>%
-  select(Year, Phase_lab, Phase_en, duration_fmt, alpha_fmt, beta_fmt, 
+  select(Year, Phase_lab, Phase_en, duration_fmt, alpha_fmt, GPPmax_fmt,
          n_points, r2_fmt, rmse_fmt, status) %>%
   print()
 
@@ -2029,7 +1586,7 @@ cat("\n")
 # Сводная таблица по годам
 cat("Сводная статистика по годам:\n")
 coef_tbl_detailed %>%
-  filter(is.finite(alpha), is.finite(beta)) %>%
+  filter(is.finite(alpha), is.finite(GPPmax)) %>%
   group_by(Year) %>%
   summarise(
     n_phases = n(),
@@ -2037,18 +1594,18 @@ coef_tbl_detailed %>%
     avg_phase_duration = mean(Phase_duration_days, na.rm=TRUE),
     alpha_mean = mean(alpha, na.rm=TRUE),
     alpha_sd = sd(alpha, na.rm=TRUE),
-    beta_mean = mean(beta, na.rm=TRUE),
-    beta_sd = sd(beta, na.rm=TRUE),
+    GPPmax_mean = mean(GPPmax, na.rm=TRUE),
+    GPPmax_sd = sd(GPPmax, na.rm=TRUE),
     r2_mean = mean(r2, na.rm=TRUE),
     .groups="drop"
   ) %>%
   mutate(
-    alpha_str = sprintf("%.4f ± %.4f", alpha_mean, alpha_sd),
-    beta_str = sprintf("%.2f ± %.2f", beta_mean, beta_sd),
+    alpha_str = sprintf("%.4f +/- %.4f", alpha_mean, alpha_sd),
+    GPPmax_str = sprintf("%.2f +/- %.2f", GPPmax_mean, GPPmax_sd),
     r2_str = sprintf("%.3f", r2_mean),
     duration_str = sprintf("%.1f", avg_phase_duration)
   ) %>%
-  select(Year, n_phases, total_duration_days, duration_str, alpha_str, beta_str, r2_str) %>%
+  select(Year, n_phases, total_duration_days, duration_str, alpha_str, GPPmax_str, r2_str) %>%
   print()
 
 cat("\n")
@@ -2056,25 +1613,25 @@ cat("\n")
 # Сводная таблица по фенофазам
 cat("Сводная статистика по фенофазам:\n")
 coef_tbl_detailed %>%
-  filter(is.finite(alpha), is.finite(beta)) %>%
+  filter(is.finite(alpha), is.finite(GPPmax)) %>%
   group_by(Phase_lab, Phase_en) %>%
   summarise(
     n_years = n(),
     avg_duration_days = mean(Phase_duration_days, na.rm=TRUE),
     alpha_mean = mean(alpha, na.rm=TRUE),
     alpha_sd = sd(alpha, na.rm=TRUE),
-    beta_mean = mean(beta, na.rm=TRUE),
-    beta_sd = sd(beta, na.rm=TRUE),
+    GPPmax_mean = mean(GPPmax, na.rm=TRUE),
+    GPPmax_sd = sd(GPPmax, na.rm=TRUE),
     r2_mean = mean(r2, na.rm=TRUE),
     .groups="drop"
   ) %>%
   mutate(
-    alpha_str = sprintf("%.4f ± %.4f", alpha_mean, alpha_sd),
-    beta_str = sprintf("%.2f ± %.2f", beta_mean, beta_sd),
+    alpha_str = sprintf("%.4f +/- %.4f", alpha_mean, alpha_sd),
+    GPPmax_str = sprintf("%.2f +/- %.2f", GPPmax_mean, GPPmax_sd),
     r2_str = sprintf("%.3f", r2_mean),
     duration_str = sprintf("%.1f", avg_duration_days)
   ) %>%
-  select(Phase_lab, Phase_en, n_years, duration_str, alpha_str, beta_str, r2_str) %>%
+  select(Phase_lab, Phase_en, n_years, duration_str, alpha_str, GPPmax_str, r2_str) %>%
   print()
 
 cat("\n")
@@ -2087,7 +1644,7 @@ coef_tbl_for_csv <- coef_tbl_detailed %>%
   ) %>%
   select(Year, Phase_ru, Phase_en, Phase_duration_days,
          alpha, alpha_ci5_lower, alpha_ci5_upper, alpha_ci1_lower, alpha_ci1_upper,
-         beta, beta_ci5_lower, beta_ci5_upper, beta_ci1_lower, beta_ci1_upper,
+         GPPmax, GPPmax_ci5_lower, GPPmax_ci5_upper, GPPmax_ci1_lower, GPPmax_ci1_upper,
          n_points, r2, rmse, status) %>%
   arrange(Year, Phase_en)
 
@@ -2098,6 +1655,80 @@ readr::write_csv(
 
 cat("✓ Подробная таблица коэффициентов сохранена: light_response_coefficients_by_year_phase.csv\n")
 cat("  Включает: английские названия фаз, продолжительность в днях, доверительные интервалы (5% и 1%)\n")
+cat("\n========================================\n\n")
+
+# ==============================================================================
+# GPPmax: МАКСИМАЛЬНАЯ ФОТОСИНТЕТИЧЕСКАЯ СПОСОБНОСТЬ ПО ФЕНОФАЗАМ И ГОДАМ
+# ==============================================================================
+
+cat("\n========================================\n")
+cat("GPPmax (МАКСИМАЛЬНАЯ ФОТОСИНТЕТИЧЕСКАЯ СПОСОБНОСТЬ)\n")
+cat("GPPmax = beta из прямоугольной гиперболы: GPP = (alpha*beta*Rg)/(alpha*Rg+beta)\n")
+cat("При Rg -> inf, GPP -> beta = GPPmax\n")
+cat("========================================\n\n")
+
+# Сводная таблица GPPmax: фазы как строки, годы как столбцы
+gppmax_wide <- coef_tbl_detailed %>%
+  filter(is.finite(GPPmax)) %>%
+  mutate(
+    GPPmax_str = sprintf("%.2f", GPPmax),
+    Phase_en = as.character(Phase_en)
+  ) %>%
+  select(Year, Phase_lab, Phase_en, GPPmax_str) %>%
+  pivot_wider(
+    id_cols = c(Phase_lab, Phase_en),
+    names_from = Year,
+    values_from = GPPmax_str,
+    names_prefix = "GPPmax_"
+  )
+
+cat("GPPmax по годам и фенофазам (umol CO2 m-2 s-1):\n\n")
+print(gppmax_wide, n = Inf)
+
+# GPPmax: сводка по годам
+cat("\nGPPmax - сводка по годам:\n")
+coef_tbl_detailed %>%
+  filter(is.finite(GPPmax)) %>%
+  group_by(Year) %>%
+  summarise(
+    n_phases = n(),
+    GPPmax_mean = mean(GPPmax, na.rm=TRUE),
+    GPPmax_sd = sd(GPPmax, na.rm=TRUE),
+    GPPmax_min = min(GPPmax, na.rm=TRUE),
+    GPPmax_max = max(GPPmax, na.rm=TRUE),
+    .groups="drop"
+  ) %>%
+  mutate(GPPmax_str = sprintf("%.2f +/- %.2f (min: %.2f, max: %.2f)",
+                              GPPmax_mean, GPPmax_sd, GPPmax_min, GPPmax_max)) %>%
+  select(Year, n_phases, GPPmax_str) %>%
+  print()
+
+# GPPmax: сводка по фенофазам
+cat("\nGPPmax - сводка по фенофазам (среднее за 3 года):\n")
+coef_tbl_detailed %>%
+  filter(is.finite(GPPmax)) %>%
+  group_by(Phase_lab, Phase_en) %>%
+  summarise(
+    n_years = n(),
+    GPPmax_mean = mean(GPPmax, na.rm=TRUE),
+    GPPmax_sd = sd(GPPmax, na.rm=TRUE),
+    .groups="drop"
+  ) %>%
+  mutate(GPPmax_str = sprintf("%.2f +/- %.2f", GPPmax_mean, GPPmax_sd)) %>%
+  select(Phase_lab, Phase_en, n_years, GPPmax_str) %>%
+  print()
+
+# Сохранение GPPmax в отдельный CSV
+gppmax_csv <- coef_tbl_detailed %>%
+  filter(is.finite(GPPmax)) %>%
+  select(Year, Phase_lab, Phase_en, Phase_duration_days,
+         GPPmax, GPPmax_ci5_lower, GPPmax_ci5_upper,
+         GPPmax_ci1_lower, GPPmax_ci1_upper,
+         alpha, r2, rmse, n_points, status) %>%
+  arrange(Year, Phase_lab)
+
+readr::write_csv(gppmax_csv, "GPPmax_by_year_phase.csv")
+cat("\n✓ Таблица GPPmax сохранена: GPPmax_by_year_phase.csv\n")
 cat("\n========================================\n\n")
 
 # ==============================================================================
@@ -2263,27 +1894,6 @@ readr::write_csv(
 cat("\n✓ Таблица дневных значений PPFD сохранена: daily_PPFD_by_year_phase.csv\n")
 cat("  Структура: Год; День вегетационного периода; Фенофаза (англ.); PPFD_f\n")
 cat("\n========================================\n\n")
-
-# -----WUE----- палитра и порядок фаз -----
-if (!exists("pal_year"))  pal_year  <- c(`2013`="#1b9e77", `2016`="#d95f02", `2023`="#7570b3")
-if (!exists("PHASE6_RU")) PHASE6_RU <- c("Всходы","Кущение","Выход в трубку","Колошение","Цветение","Созревание")
-
-# ----- утилиты -----
-safe_num <- function(x){
-  if (is.numeric(x)) return(x)
-  if (is.factor(x))  x <- as.character(x)
-  x <- gsub(",", ".", trimws(x), fixed = TRUE)
-  suppressWarnings(as.numeric(x))
-}
-pick_first_present <- function(nm, candidates){
-  cand <- intersect(candidates, nm)
-  if (length(cand)) cand[1] else NA_character_
-}
-first_or_stop <- function(df, candidates, label = "колонку"){
-  col <- pick_first_present(names(df), candidates)
-  if (is.na(col)) stop(sprintf("Не нашли %s. Искали: %s", label, paste(candidates, collapse=", ")))
-  col
-}
 
 # ----- подготовка по году: выбираем ровно по 1 колонке для GPP/LE/VPD/Tair и считаем WUE -----
 # Используем bigleaf::LE.to.ET() для корректного расчета эвапотранспирации
