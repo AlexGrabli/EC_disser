@@ -414,9 +414,15 @@ if (file.exists(meteo_file_2023)) {
   ) |> clean_names()
   names(d23_meteo) <- trimws(names(d23_meteo))
 
-  # Приводим timestamp к POSIXct (формат: dd.mm.yyyy HH:MM)
+  # Приводим timestamp к POSIXct (формат: dd.mm.yyyy H:MM или dd.mm.yyyy)
+  # Используем .data[["timestamp"]] чтобы не конфликтовать с base::timestamp()
   d23_meteo <- d23_meteo %>%
-    mutate(datetime = dmy_hm(timestamp))
+    mutate(datetime = {
+      ts <- .data[["timestamp"]]
+      dt <- suppressWarnings(dmy_hm(ts))
+      dt[is.na(dt)] <- suppressWarnings(dmy(ts[is.na(dt)]))
+      dt
+    })
 
   cat("  ✓ Загружено", nrow(d23_meteo), "строк метеоданных\n")
 } else {
