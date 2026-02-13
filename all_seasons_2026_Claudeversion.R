@@ -2571,36 +2571,39 @@ season_bounds <- tibble(
 )
 
 # ---------- Кумулятивные потоки из df_all ----------
-# df_all уже содержит объединённые df13+df16+df23, отфильтрованные по фазам.
-# Пересчёт: µmol CO2 m-2 s-1 → g C m-2 за полчаса (×1800 × 12 / 1e6)
-# NEE_daily = Reco_daily - GPP_daily (гарантия баланса)
-# Дополнительно считаем NEE_daily_raw = sum(NEE) для сравнения с данными
+# 1) Сначала считаем всё в исходных единицах потока (µmol CO2 m-2 s-1)
+# 2) Проверяем баланс по итоговым суммам: NEE = Reco - GPP
+# 3) Только после этого переводим в gCO2 m-2 (и в gCO2 m-2 day-1)
 
 cat("Расчет кумулятивных сумм по годам из df_all (только вегетационный период)...\n")
 
-coeff_gC <- 1800 * 12 / 1e6   # µmol CO2 m-2 s-1 → g C m-2 за 30 мин
-
+dt_seconds <- 1800
 df_all_daily <- df_all %>%
   filter(!is.na(Date), !is.na(Year)) %>%
   # фильтр по вегетационному периоду
   inner_join(season_bounds, by = "Year") %>%
   filter(Date >= Sowing, Date <= Harvesting) %>%
   mutate(
-    GPP_gC  = ifelse(is.finite(GPP),  GPP  * coeff_gC, 0),
-    Reco_gC = ifelse(is.finite(Reco), Reco * coeff_gC, 0),
-    NEE_gC  = ifelse(is.finite(NEE),  NEE  * coeff_gC, 0)
+    GPP_umol_30m  = ifelse(is.finite(to_num(GPP)),  to_num(GPP)  * dt_seconds, 0),
+    Reco_umol_30m = ifelse(is.finite(to_num(Reco)), to_num(Reco) * dt_seconds, 0),
+    NEE_umol_30m  = ifelse(is.finite(to_num(NEE)),  to_num(NEE)  * dt_seconds, 0)
   ) %>%
   group_by(Year, Date, Sowing) %>%
   summarise(
-    GPP_daily      = sum(GPP_gC,  na.rm = TRUE),
-    Reco_daily     = sum(Reco_gC, na.rm = TRUE),
-    NEE_daily_raw  = sum(NEE_gC,  na.rm = TRUE),   # сумма NEE «как есть» в данных
-    n_half_hours   = n(),
+    GPP_daily_umol      = sum(GPP_umol_30m,  na.rm = TRUE),
+    Reco_daily_umol     = sum(Reco_umol_30m, na.rm = TRUE),
+    NEE_daily_raw_umol  = sum(NEE_umol_30m,  na.rm = TRUE),   # сумма NEE «как есть» в данных
+    # NEE_daily как производная = Reco - GPP (гарантирует баланс)
+    NEE_daily_umol      = sum(Reco_umol_30m, na.rm = TRUE) - sum(GPP_umol_30m, na.rm = TRUE),
+    n_half_hours        = n(),
     .groups = "drop"
   ) %>%
-  # NEE_daily как производная = Reco - GPP (гарантирует баланс)
   mutate(
-    NEE_daily        = Reco_daily - GPP_daily,
+    # Конвертация в gCO2 — только после расчета и проверки баланса в µmol
+    GPP_daily        = GPP_daily_umol * 44 / 1e6,
+    Reco_daily       = Reco_daily_umol * 44 / 1e6,
+    NEE_daily_raw    = NEE_daily_raw_umol * 44 / 1e6,
+    NEE_daily        = NEE_daily_umol * 44 / 1e6,
     Days_from_sowing = as.numeric(Date - Sowing) + 1
   )
 
@@ -2617,6 +2620,10 @@ df_all_daily_complete <- df_all_daily %>%
         Reco_daily     = ifelse(is.na(Reco_daily),     0, Reco_daily),
         NEE_daily_raw  = ifelse(is.na(NEE_daily_raw),  0, NEE_daily_raw),
         NEE_daily      = Reco_daily - GPP_daily,
+        GPP_daily_umol = ifelse(is.na(GPP_daily_umol), 0, GPP_daily_umol),
+        Reco_daily_umol = ifelse(is.na(Reco_daily_umol), 0, Reco_daily_umol),
+        NEE_daily_raw_umol = ifelse(is.na(NEE_daily_raw_umol), 0, NEE_daily_raw_umol),
+        NEE_daily_umol = Reco_daily_umol - GPP_daily_umol,
         n_half_hours   = ifelse(is.na(n_half_hours),   0L, n_half_hours),
         Days_from_sowing = as.numeric(Date - sow) + 1
       )
@@ -2631,7 +2638,11 @@ df_all_cum <- df_all_daily_complete %>%
     GPP_cum      = cumsum(GPP_daily),
     Reco_cum     = cumsum(Reco_daily),
     NEE_cum      = cumsum(NEE_daily),        # = Reco_cum - GPP_cum (по построению)
-    NEE_cum_raw  = cumsum(NEE_daily_raw)      # для сравнения с «сырым» NEE
+    NEE_cum_raw  = cumsum(NEE_daily_raw),     # для сравнения с «сырым» NEE
+    GPP_cum_umol = cumsum(GPP_daily_umol),
+    Reco_cum_umol = cumsum(Reco_daily_umol),
+    NEE_cum_umol = cumsum(NEE_daily_umol),
+    NEE_cum_raw_umol = cumsum(NEE_daily_raw_umol)
   ) %>%
   ungroup() %>%
   mutate(Year = factor(Year))
@@ -2645,11 +2656,12 @@ cat(sprintf("  Всего дней: %d (2013: %d, 2016: %d, 2023: %d)\n",
 
 # ---------- GDD (суммы активных температур) — тоже из df_all ----------
 gdd_all <- df_all %>%
-  filter(!is.na(Date), !is.na(Year), !is.na(Tair)) %>%
+  mutate(Tair_num = to_num(Tair)) %>%
+  filter(!is.na(Date), !is.na(Year), !is.na(Tair_num)) %>%
   inner_join(season_bounds, by = "Year") %>%
   filter(Date >= Sowing, Date <= Harvesting) %>%
   group_by(Year, Date, Sowing) %>%
-  summarise(Tair_mean = mean(Tair, na.rm = TRUE), .groups = "drop") %>%
+  summarise(Tair_mean = mean(Tair_num, na.rm = TRUE), .groups = "drop") %>%
   mutate(
     GDD_daily = pmax(0, Tair_mean - 10),
     Days_from_sowing = as.numeric(Date - Sowing) + 1
@@ -2675,10 +2687,15 @@ cumulative_summary <- df_all_cum %>%
     End_date = max(Date, na.rm = TRUE),
     Days = as.numeric(End_date - Start_date) + 1,
 
-    GPP_total_gC  = dplyr::last(GPP_cum),
-    Reco_total_gC = dplyr::last(Reco_cum),
-    NEE_total_gC  = dplyr::last(NEE_cum),       # = Reco_total - GPP_total (по построению)
-    NEE_total_raw = dplyr::last(NEE_cum_raw),    # cumsum(NEE) «как есть» из данных
+    GPP_total_umol  = dplyr::last(GPP_cum_umol),
+    Reco_total_umol = dplyr::last(Reco_cum_umol),
+    NEE_total_umol  = dplyr::last(NEE_cum_umol),       # = Reco_total - GPP_total (по построению)
+    NEE_total_raw_umol = dplyr::last(NEE_cum_raw_umol),
+
+    GPP_total_gCO2  = dplyr::last(GPP_cum),
+    Reco_total_gCO2 = dplyr::last(Reco_cum),
+    NEE_total_gCO2  = dplyr::last(NEE_cum),
+    NEE_total_raw_gCO2 = dplyr::last(NEE_cum_raw),
 
     GPP_mean_daily  = mean(GPP_daily, na.rm = TRUE),
     Reco_mean_daily = mean(Reco_daily, na.rm = TRUE),
@@ -2694,10 +2711,10 @@ log_debug_agent(
   message = "cumulative_summary across years",
   data_fields = list(
     n_years = nrow(cumulative_summary),
-    min_GPP_total = suppressWarnings(min(cumulative_summary$GPP_total_gC, na.rm = TRUE)),
-    max_GPP_total = suppressWarnings(max(cumulative_summary$GPP_total_gC, na.rm = TRUE)),
-    min_NEE_total = suppressWarnings(min(cumulative_summary$NEE_total_gC, na.rm = TRUE)),
-    max_NEE_total = suppressWarnings(max(cumulative_summary$NEE_total_gC, na.rm = TRUE))
+    min_GPP_total = suppressWarnings(min(cumulative_summary$GPP_total_umol, na.rm = TRUE)),
+    max_GPP_total = suppressWarnings(max(cumulative_summary$GPP_total_umol, na.rm = TRUE)),
+    min_NEE_total = suppressWarnings(min(cumulative_summary$NEE_total_umol, na.rm = TRUE)),
+    max_NEE_total = suppressWarnings(max(cumulative_summary$NEE_total_umol, na.rm = TRUE))
   )
 )
 # endregion
@@ -2708,12 +2725,12 @@ print(cumulative_summary)
 cat("\nПроверка баланса NEE = Reco - GPP:\n")
 cumulative_summary %>%
   mutate(
-    NEE_check   = Reco_total_gC - GPP_total_gC,
-    delta       = NEE_total_gC - NEE_check,        # должен быть 0 (по построению)
-    delta_raw   = NEE_total_raw - NEE_check,        # расхождение «сырого» NEE и баланса
+    NEE_check   = Reco_total_umol - GPP_total_umol,
+    delta       = NEE_total_umol - NEE_check,        # должен быть 0 (по построению)
+    delta_raw   = NEE_total_raw_umol - NEE_check,    # расхождение «сырого» NEE и баланса
     ok_balance  = abs(delta) < 1e-6
   ) %>%
-  select(Year, GPP_total_gC, Reco_total_gC, NEE_total_gC, NEE_total_raw,
+  select(Year, GPP_total_umol, Reco_total_umol, NEE_total_umol, NEE_total_raw_umol,
          NEE_check, delta, delta_raw, ok_balance) %>%
   print()
 cat("  delta       = NEE(Reco-GPP) - (Reco-GPP)  — должен быть 0\n")
@@ -2733,10 +2750,13 @@ gdd_summary <- gdd_all %>%
 cat("\nСуммы активных температур (>10°C):\n\n")
 print(gdd_summary)
 
+cat("\nПроверка GDD 2023 (не должна быть 0):\n")
+gdd_summary %>% filter(Year == "2023" | Year == 2023) %>% print()
+
 # Объединенная таблица сравнения
 comparison_table <- cumulative_summary %>%
   left_join(gdd_summary, by = "Year") %>%
-  select(Year, Days, GPP_total_gC, Reco_total_gC, NEE_total_gC, GDD_total, Days_above_10C)
+  select(Year, Days, GPP_total_gCO2, Reco_total_gCO2, NEE_total_gCO2, GDD_total, Days_above_10C)
 
 cat("\nПолная таблица сравнения:\n\n")
 print(comparison_table)
@@ -2788,7 +2808,7 @@ p_gpp_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = GPP_cum, color = Y
   scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
   labs(title = "Кумулятивный GPP по дням вегетационного периода",
        subtitle = "Вертикальные линии — начало фенофаз",
-       x = "Дни от посева", y = "Кумулятивный GPP (г C м⁻²)",
+       x = "Дни от посева", y = "Кумулятивный GPP (г CO₂ м⁻²)",
        color = "Год") +
   theme_bw(base_size = 12) +
   theme(legend.position = "right",
@@ -2805,7 +2825,7 @@ p_reco_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = Reco_cum, color =
   scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
   labs(title = "Кумулятивный Reco по дням вегетационного периода",
        subtitle = "Вертикальные линии — начало фенофаз",
-       x = "Дни от посева", y = "Кумулятивный Reco (г C м⁻²)",
+       x = "Дни от посева", y = "Кумулятивный Reco (г CO₂ м⁻²)",
        color = "Год") +
   theme_bw(base_size = 12) +
   theme(legend.position = "right",
@@ -2823,7 +2843,7 @@ p_nee_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = NEE_cum, color = Y
   scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
   labs(title = "Кумулятивный NEE по дням вегетационного периода",
        subtitle = "Вертикальные линии — начало фенофаз",
-       x = "Дни от посева", y = "Кумулятивный NEE (г C м⁻²)",
+       x = "Дни от посева", y = "Кумулятивный NEE (г CO₂ м⁻²)",
        color = "Год") +
   theme_bw(base_size = 12) +
   theme(legend.position = "right",
@@ -2853,4 +2873,3 @@ cat("\n✓ Все графики сохранены!\n")
 cat("\n========================================\n")
 cat("РАСЧЕТЫ ЗАВЕРШЕНЫ\n")
 cat("========================================\n")
-
