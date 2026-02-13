@@ -11,61 +11,6 @@ suppressPackageStartupMessages({
   library(tidyr)
 })
 
-# region agent log
-# Минимальная функция логирования для отладки (NDJSON в .cursor/debug.log)
-log_debug_agent <- function(hypothesisId,
-                            location,
-                            message,
-                            data_fields = list(),
-                            runId = "pre-fix") {
-  timestamp <- as.integer(as.numeric(Sys.time()) * 1000)
-  rand_suffix <- paste(sample(c(0:9, letters), 6, replace = TRUE), collapse = "")
-  id <- paste0("log_", timestamp, "_", rand_suffix)
-
-  # Формируем JSON-подобную строку data из простых скаляров
-  data_json <- "{}"
-  if (length(data_fields) > 0) {
-    parts <- mapply(function(name, value) {
-      if (is.character(value) && length(value) == 1) {
-        v <- gsub("\"", "'", value, fixed = TRUE)
-        sprintf('"%s":"%s"', name, v)
-      } else if (is.numeric(value) && length(value) == 1 && is.finite(value)) {
-        sprintf('"%s":%s', name, format(value, scientific = FALSE))
-      } else if ((is.integer(value) || is.numeric(value)) && length(value) == 1 && !is.na(value)) {
-        sprintf('"%s":%d', name, as.integer(value))
-      } else {
-        sprintf('"%s":"NA"', name)
-      }
-    }, names(data_fields), data_fields, USE.NAMES = FALSE)
-    data_json <- paste0("{", paste(parts, collapse = ","), "}")
-  }
-
-  line <- sprintf(
-    '{"id":"%s","timestamp":%d,"location":"%s","message":"%s","data":%s,"runId":"%s","hypothesisId":"%s"}',
-    id,
-    timestamp,
-    location,
-    gsub("\"", "'", message, fixed = TRUE),
-    data_json,
-    runId,
-    hypothesisId
-  )
-
-  log_dir <- "f:/ДИССЕР/Rscripts/all_seasons+kursk/.cursor"
-  if (!dir.exists(log_dir)) {
-    dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
-  }
-  log_file <- file.path(log_dir, "debug.log")
-
-  cat(
-    line,
-    file = log_file,
-    sep = "\n",
-    append = TRUE
-  )
-}
-# endregion
-
 # ----------------------- Константы фаз -----------------------
 PHASE6_EN <- c("Emergence","Tillering","StemElong","Heading","Flowering","Ripening")
 PHASE6_RU <- c("Всходы","Кущение","Выход в трубку","Колошение","Цветение","Созревание")
@@ -770,31 +715,59 @@ load_eddypro_may23 <- function(path, year = NA_integer_) {
 
 load_precip_2023 <- function(path) {
   if (!file.exists(path)) return(NULL)
-  fl <- readr::read_lines(path, n_max = 2)[2]  # skip=1, берём вторую строку
-  dl <- if (str_detect(fl, "\t")) "\t" else if (str_detect(fl, ";")) ";" else ","
-  raw <- readr::read_delim(path, delim = dl, skip = 1, show_col_types = FALSE)
+
+  # 1. ОПРЕДЕЛЯЕМ РАЗДЕЛИТЕЛЬ
+  # Читаем первую строку с правильной кодировкой
+  header_line <- readr::read_lines(path, n_max = 1, locale = locale(encoding = "UTF-8"))
+  dl <- if (str_detect(header_line, ";")) ";" else if (str_detect(header_line, "\t")) "\t" else ","
+  
+  # 2. ЧИТАЕМ ДАННЫЕ (UTF-8, skip=0)
+  raw <- readr::read_delim(
+    path, 
+    delim = dl, 
+    skip = 0,                            # Заголовки на 1-й строке
+    locale = locale(encoding = "UTF-8"), # Явно указываем UTF-8
+    show_col_types = FALSE
+  )
+  
+  # Теперь names(raw) корректный UTF-8, и trimws не упадет
   names(raw) <- trimws(names(raw))
+  
+  # Если имя первой колонки считалось с ошибкой (BOM или что-то еще), переименуем
+  if (!"Число" %in% names(raw) && !"Day" %in% names(raw)) {
+     names(raw)[1] <- "Day"
+  } else if ("Число" %in% names(raw)) {
+     raw <- raw %>% rename(Day = Число)
+  }
+
   if (ncol(raw) < 2) return(NULL)
 
-  day_col <- names(raw)[1]
-  raw <- raw %>%
-    rename(Day = !!rlang::sym(day_col)) %>%
-    mutate(Day = to_num(Day))
-
-  month_map <- c("Апр" = 4, "Май" = 5, "Июн" = 6, "Июл" = 7, "Авг" = 8, "Сен" = 9)
+  month_map <- c("Apr" = 4, "May" = 5, "June" = 6, "July" = 7, "Aug" = 8, "Sempt" = 9)
 
   raw_long <- raw %>%
+    # Очистка Дня (на случай пробелов или формата)
+    mutate(Day = as.numeric(str_replace(as.character(Day), ",", "."))) %>% 
+    filter(!is.na(Day)) %>%
     pivot_longer(-Day, names_to = "Month", values_to = "Precip") %>%
     mutate(
+      Month = trimws(Month), # Убираем пробелы из названий месяцев
       MonthNum = month_map[Month],
-      Precip = to_num(na_if(Precip, "-")),
-      Date = as.Date(sprintf("2023-%02d-%02d", MonthNum, Day))
+      
+      # Очистка осадков: запятая -> точка, "-" -> NA
+      Precip = str_replace(Precip, ",", "."),
+      Precip = as.numeric(na_if(Precip, "-")),
+      
+      # БЕЗОПАСНАЯ ДАТА: make_date вернет NA для 31 июня, вместо ошибки
+      Date = make_date(year = 2023, month = MonthNum, day = Day)
     ) %>%
+    # Удаляем строки, где дата не сложилась (например, 31 апреля)
     filter(!is.na(Date))
 
+  # Агрегация
   raw_long %>%
     group_by(Date) %>%
-    summarise(Precipitation_sum = sum_or_na(Precip), .groups = "drop")
+    summarise(Precipitation_sum = sum(Precip, na.rm = TRUE), .groups = "drop") %>%
+    arrange(Date)
 }
 
 load_precip_2016 <- function(path) {
@@ -1081,7 +1054,7 @@ biomet_2016_path <- file.path(base_dir, "2016BiomB.csv")
 precip_2016_path <- file.path(base_dir, "2016_precip.csv")
 biomet_2023_main_path <- file.path(base_dir, "Anal11_biomet.csv")
 biomet_2023_eddy_path <- file.path(base_dir, "eddypro_may_23.csv")
-precip_2023_path <- file.path(base_dir, "Осадки.csv")
+precip_2023_path <- file.path(base_dir, "Осадки_2023.csv")
 
 biomet_2013 <- load_biomet_data(biomet_2013_path, year = 2013,
                                 date_col = "DATE_1", time_col = "TIME_1")
@@ -1089,8 +1062,8 @@ biomet_2016 <- load_biomet_data(biomet_2016_path, year = 2016, date_col = "TIMES
 precip_2016_ts <- load_precip_2016(precip_2016_path)
 biomet_2023_main <- load_biomet_data(biomet_2023_main_path, year = 2023, date_col = "DateTime")
 biomet_2023_eddy <- load_eddypro_may23(biomet_2023_eddy_path, year = 2023)
-biomet_2023 <- merge_biomet_sources(biomet_2023_main, biomet_2023_eddy)
 precip_2023_daily <- load_precip_2023(precip_2023_path)
+biomet_2023 <- merge_biomet_sources(biomet_2023_main, biomet_2023_eddy)
 
 log_biomet_summary <- function(label, df) {
   if (is.null(df) || nrow(df) == 0) {
@@ -1114,7 +1087,7 @@ if (!is.null(precip_2016_ts)) {
               min(precip_2016_ts$DateTime, na.rm = TRUE),
               max(precip_2016_ts$DateTime, na.rm = TRUE)))
 } else {
-  cat("  !! precip_2016_ts: no data\n")
+  cat("  !! 2016_precip: no data\n")
 }
 if (!is.null(precip_2023_daily)) {
   cat(sprintf("  precip_2023_daily: n=%d, Date range=%s..%s\n",
@@ -1126,14 +1099,13 @@ if (!is.null(precip_2023_daily)) {
 }
 
 if (!is.null(biomet_2013)) create_meteo_plots(biomet_2013, 2013, B2013)
-if (!is.null(biomet_2016)) create_meteo_plots(biomet_2016, 2016, B2016,
-                                              precip_ts = precip_2016_ts)
+if (!is.null(biomet_2016)) create_meteo_plots(biomet_2016, 2016, B2016)
 if (!is.null(biomet_2023)) create_meteo_plots(biomet_2023, 2023, B2023,
                                                precip_ts = precip_2023_daily)
 
 # ----------------------- Загрузка 2013/2016 и сборка -----------------------
 f2013 <- "Lasslop_2013_Complete_GapFilled.csv"
-f2016 <- "Moscow_2016_verFin.csv"
+f2016 <- "Moscow_2016_verFin_newVersion.csv"
 stopifnot(file.exists(f2013), file.exists(f2016))
 raw13 <- readr::read_csv(f2013, show_col_types = FALSE, guess_max = 1e6) |> clean_names()
 raw16 <- readr::read_csv(f2016, show_col_types = FALSE, guess_max = 1e6) |> clean_names()
@@ -1185,32 +1157,6 @@ theme_base <- theme_bw(base_size = 12) +
 
 plot_flux <- function(flux){
   cols <- paste0(flux, c("_mean","_lwr","_upr"))
-  # Для GPP: 2016 год на фазе Всходы показываем пунктиром
-  #if (flux == "GPP") {
-    # Данные БЕЗ 2016 Всходы
-    #diu_main <- diu %>% filter(!(Year == 2016 & Phase_lab == "Всходы"))
-    # Только 2016 Всходы
-    #diu_dashed <- diu %>% filter(Year == 2016 & Phase_lab == "Всходы")
-
-    #p <- ggplot(diu, aes(x = HourInt, y = .data[[cols[1]]],
-                    #color = factor(Year), fill = factor(Year))) +
-      #geom_ribbon(aes(ymin = .data[[cols[2]]], ymax = .data[[cols[3]]]),
-                  #alpha = 0.14, colour = NA) +
-      # Обычные линии (все кроме 2016 Всходы)
-      #geom_line(data = diu_main, linewidth = 1) +
-      #geom_point(data = diu_main, size = 1.1) +
-      # Пунктирная линия для 2016 Всходы
-      #geom_line(data = diu_dashed, linewidth = 1, linetype = "dashed") +
-      #geom_point(data = diu_dashed, size = 1.1) +
-      #facet_wrap(~Phase_lab, ncol = 3, drop = FALSE) +
-      #scale_color_manual(values = pal_year, name = "Год") +
-      #scale_fill_manual(values = pal_year, guide = "none") +
-      #scale_x_continuous(breaks = seq(0,23,6), limits = c(0,23), expand = c(0,0)) +
-      #labs(title = paste("Diurnal —", flux),
-           #x = "Час суток", y = "µmol CO₂ m⁻² s⁻¹") +
-      #theme_base
-  #} else {
-    # Для NEE и Reco — без изменений
   p <- ggplot(diu, aes(x = HourInt, y = .data[[cols[1]]],
                     color = factor(Year), fill = factor(Year))) +
       geom_ribbon(aes(ymin = .data[[cols[2]]], ymax = .data[[cols[3]]]),
@@ -1222,7 +1168,7 @@ plot_flux <- function(flux){
       scale_fill_manual(values = pal_year, guide = "none") +
       scale_x_continuous(breaks = seq(0,23,6), limits = c(0,23), expand = c(0,0)) +
       labs(title = paste("Среднесуточные значения", flux),
-           x = "Часы суток", y = "µmol CO₂ m⁻² s⁻¹") +
+           x = "Часы суток", y = "мкмоль CO₂ м⁻² с⁻¹") +
       theme_base
   return(p)
 }
@@ -1401,7 +1347,7 @@ anno_fixed <- coef_tbl %>%
   mutate(
     x     = x_pad,
     y     = y_max_fixed - top_pad - (row_number()-1) * y_step,
-    label = paste0("α = ", fmt_num(alpha), "  GPPmax = ", fmt_num(beta))
+    label = paste0("α = ", fmt_num(alpha), "  β = ", fmt_num(beta))
   ) %>%
   ungroup()
 
@@ -1421,8 +1367,8 @@ p_whisk <- ggplot() +
   facet_wrap(~Phase_lab, ncol=3, scales="fixed") +
   scale_color_manual(values=pal_year, name="Год") +
   scale_y_continuous(limits = c(0, y_max_fixed), breaks = y_breaks, expand = expansion(mult = c(0, 0.02))) +
-  labs(title="Световые кривые по фенофазам",
-       x="PPFD (µmol photons m⁻² s⁻¹)", y="GPP (µmol CO₂ m⁻² s⁻¹)") +
+  labs(title="",
+       x="PPFD (мкмоль фотонов м⁻² с⁻¹)", y="Общая первичная продуктивность (мкмоль CO₂ м⁻² с⁻¹)") +
   theme_base
 
 p_lines_pts <- ggplot() +
@@ -1434,7 +1380,7 @@ p_lines_pts <- ggplot() +
   scale_color_manual(values=pal_year, name="Год") +
   scale_y_continuous(limits = c(0, y_max_fixed), breaks = y_breaks, expand = expansion(mult = c(0, 0.02))) +
   labs(title="Световые кривые по фенофазам",
-       x="PPFD (µmol photons m⁻² s⁻¹)", y="GPP (µmol CO₂ m⁻² s⁻¹)") +
+       x="PPFD (мкмоль фотонов м⁻² с⁻¹)", y="Общая первичная продуктивность (мкмоль CO₂ м⁻² с⁻¹)") +
   theme_base
 
 p_lines_only <- ggplot() +
@@ -1445,7 +1391,7 @@ p_lines_only <- ggplot() +
   scale_color_manual(values=pal_year, name="Год") +
   scale_y_continuous(limits = c(0, y_max_fixed), breaks = y_breaks, expand = expansion(mult = c(0, 0.02))) +
   labs(title="Световые кривые по фенофазам",
-       x="PPFD (µmol photons m⁻² s⁻¹)", y="GPP (µmol CO₂ m⁻² s⁻¹)") +
+       x="PPFD (мкмоль фотонов м⁻² с⁻¹)", y="Общая первичная продуктивность (мкмоль CO₂ м⁻² с⁻¹)") +
   theme_base
 
 print(p_whisk); print(p_lines_pts); print(p_lines_only)
