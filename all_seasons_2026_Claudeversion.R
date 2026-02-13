@@ -376,6 +376,8 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
   col_tair <- pick_col(nm, c("Tair_f","tair_f","Tair","tair","air_temperature","ta"))
   col_vpd  <- pick_col(nm, c("VPD_f","vpd_f","VPD","vpd","vpd_orig"))
   col_rh   <- pick_col(nm, c("RH_f","rh_f","RH","rh","r_h"))
+  col_ppfd <- pick_col(nm, c("PPFD_f","ppfd_f","PPFD","ppfd","ppfd_mean","ppfd_orig"))
+  col_rg   <- pick_col(nm, c("Rg_f","rg_f","Rg","rg","rg_orig","sw_in","sr01dn_avg"))
 
   # Диагностика: какие столбцы найдены и какие данные в них
   cat(sprintf("\n=== Диагностика build_year_df для %d ===\n", year))
@@ -389,6 +391,8 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
   cat(sprintf("    Tair: %s\n", ifelse(is.na(col_tair), "НЕ НАЙДЕН", col_tair)))
   cat(sprintf("    VPD:  %s\n", ifelse(is.na(col_vpd), "НЕ НАЙДЕН", col_vpd)))
   cat(sprintf("    RH:   %s\n", ifelse(is.na(col_rh), "НЕ НАЙДЕН", col_rh)))
+  cat(sprintf("    PPFD: %s\n", ifelse(is.na(col_ppfd), "НЕ НАЙДЕН", col_ppfd)))
+  cat(sprintf("    Rg:   %s\n", ifelse(is.na(col_rg), "НЕ НАЙДЕН", col_rg)))
 
   if (!is.na(col_gpp)) {
     cat(sprintf("  Сырые значения GPP (первые 5): %s\n", paste(head(raw[[col_gpp]], 5), collapse=", ")))
@@ -406,6 +410,8 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
   Tair <- if (!is.na(col_tair)) to_num(raw[[col_tair]]) else rep(NA_real_, nrow(raw))
   VPD  <- if (!is.na(col_vpd))  to_num(raw[[col_vpd]])  else rep(NA_real_, nrow(raw))
   RH   <- if (!is.na(col_rh))   to_num(raw[[col_rh]])   else rep(NA_real_, nrow(raw))
+  PPFD <- if (!is.na(col_ppfd)) to_num(raw[[col_ppfd]]) else rep(NA_real_, nrow(raw))
+  Rg   <- if (!is.na(col_rg))   to_num(raw[[col_rg]])   else rep(NA_real_, nrow(raw))
 
   # Расчет WUE (Water Use Efficiency) = GPP / LE
   # LE переводим из W/m2 в mmol/m2/s: LE_W / 2.45 (latent heat) / 18 (molar mass H2O) * 1000
@@ -425,6 +431,8 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
   cat(sprintf("    H:    NA=%d, not-NA=%d\n", sum(is.na(H)), sum(!is.na(H))))
   cat(sprintf("    Tair: NA=%d, not-NA=%d\n", sum(is.na(Tair)), sum(!is.na(Tair))))
   cat(sprintf("    WUE:  NA=%d, not-NA=%d\n", sum(is.na(WUE)), sum(!is.na(WUE))))
+  cat(sprintf("    PPFD: NA=%d, not-NA=%d\n", sum(is.na(PPFD)), sum(!is.na(PPFD))))
+  cat(sprintf("    Rg:   NA=%d, not-NA=%d\n", sum(is.na(Rg)), sum(!is.na(Rg))))
 
   out <- tibble(
     Year = year,
@@ -439,7 +447,9 @@ build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
     Tair = Tair,
     VPD = VPD,
     RH = RH,
-    WUE = WUE
+    WUE = WUE,
+    PPFD = PPFD,
+    Rg = Rg
   )
 
   # Фазы (строго 6, без «после уборки»)
@@ -531,6 +541,7 @@ df23 <- d23_avg %>%
     GPP = gpp,
     Reco = reco,
     PPFD = ppfd,
+    Rg = rg_f,
     # Метеопеременные из второго файла (приоритет для _f)
     LE = le_f,
     H = h_f,
@@ -539,7 +550,7 @@ df23 <- d23_avg %>%
     RH = NA_real_,  # RH нет в метеофайле
     WUE = NA_real_  # Будет рассчитан позже
   ) %>%
-  select(Year, datetime, Date, HourInt, Phase_lab, NEE, GPP, Reco, PPFD,
+  select(Year, datetime, Date, HourInt, Phase_lab, NEE, GPP, Reco, PPFD, Rg,
          LE, H, Tair, VPD, RH, WUE)
 
 cat("  ✓ df23 создан:", nrow(df23), "строк\n")
