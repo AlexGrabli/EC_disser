@@ -407,12 +407,17 @@ if (!exists("d23_avg") && file.exists("fluxes_2023_biomass_mean.csv")) {
 meteo_file_2023 <- "ИТОГ2_BarleyFilledAllScen_65p_biom_thrash_new2505.csv"
 if (file.exists(meteo_file_2023)) {
   cat("Загрузка метеоданных 2023 из:", meteo_file_2023, "\n")
+  # Автоопределение разделителя (файл может быть ; или , или \t)
+  .first_line <- readr::read_lines(meteo_file_2023, n_max = 1)
+  .meteo_delim <- if (str_detect(.first_line, "\t")) "\t" else if (str_detect(.first_line, ";")) ";" else ","
+  cat("  Определён разделитель:", dQuote(.meteo_delim), "\n")
   d23_meteo <- readr::read_delim(
     meteo_file_2023,
-    delim = ";",
+    delim = .meteo_delim,
     show_col_types = FALSE
   ) |> clean_names()
   names(d23_meteo) <- trimws(names(d23_meteo))
+  cat("  Столбцов:", ncol(d23_meteo), "- первые 5:", paste(head(names(d23_meteo), 5), collapse=", "), "\n")
 
   # Приводим timestamp к POSIXct (формат: dd.mm.yyyy H:MM или dd.mm.yyyy)
   # Ищем столбец timestamp (может называться по-разному после clean_names)
@@ -680,7 +685,9 @@ load_eddypro_may23 <- function(path, year = NA_integer_) {
 
 load_precip_2023 <- function(path) {
   if (!file.exists(path)) return(NULL)
-  raw <- readr::read_delim(path, delim = ";", skip = 1, show_col_types = FALSE)
+  fl <- readr::read_lines(path, n_max = 2)[2]  # skip=1, берём вторую строку
+  dl <- if (str_detect(fl, "\t")) "\t" else if (str_detect(fl, ";")) ";" else ","
+  raw <- readr::read_delim(path, delim = dl, skip = 1, show_col_types = FALSE)
   names(raw) <- trimws(names(raw))
   if (ncol(raw) < 2) return(NULL)
 
