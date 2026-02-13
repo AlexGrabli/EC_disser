@@ -487,14 +487,15 @@ if (file.exists(meteo_file_2023)) {
   names(d23_meteo) <- trimws(names(d23_meteo))
 
   # Приводим timestamp к POSIXct (формат: dd.mm.yyyy H:MM или dd.mm.yyyy)
-  # Используем .data[["timestamp"]] чтобы не конфликтовать с base::timestamp()
-  d23_meteo <- d23_meteo %>%
-    mutate(datetime = {
-      ts <- .data[["timestamp"]]
-      dt <- suppressWarnings(dmy_hm(ts))
-      dt[is.na(dt)] <- suppressWarnings(dmy(ts[is.na(dt)]))
-      dt
-    })
+  # Ищем столбец timestamp (может называться по-разному после clean_names)
+  ts_col <- grep("timestamp|time_stamp", names(d23_meteo), ignore.case = TRUE, value = TRUE)[1]
+  if (is.na(ts_col)) ts_col <- names(d23_meteo)[1]  # fallback: первый столбец
+  cat("  Столбец времени в d23_meteo:", ts_col, "\n")
+  ts_vec <- d23_meteo[[ts_col]]
+  d23_meteo$datetime <- suppressWarnings(dmy_hm(ts_vec))
+  d23_meteo$datetime[is.na(d23_meteo$datetime)] <- suppressWarnings(
+    dmy(ts_vec[is.na(d23_meteo$datetime)])
+  )
 
   cat("  ✓ Загружено", nrow(d23_meteo), "строк метеоданных\n")
 } else {
