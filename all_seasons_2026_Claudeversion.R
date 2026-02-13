@@ -2577,25 +2577,30 @@ add_days_from_sowing <- function(df, sowing_date) {
 
 # Функция для расчета кумулятивных сумм потоков CO2
 # Пересчитывает µmol CO2 m-2 s-1 в g C m-2 день-1
-# 1 µmol CO2 = 44 µg CO2, за 30 минут (1800 с)
-# Агрегирует данные по дням для гладких линий
+# Множитель: 1800 с (полчаса) × 12 (молярная масса C) / 1e6 = g C за полчаса
+# NEE = Reco - GPP (стандартная EC конвенция: отрицательный NEE = поглощение)
+# NEE выводится из GPP и Reco, а НЕ суммируется независимо,
+# чтобы гарантировать выполнение баланса NEE = Reco - GPP
 calculate_cumulative_fluxes <- function(df, sowing_date = NULL, harvest_date = NULL) {
   daily <- df %>%
     filter(!is.na(Date)) %>%
     arrange(Date, HourInt) %>%
     mutate(
+      # Учитываем только полчасы, где ОБА потока (GPP и Reco) конечны
+      ok = is.finite(GPP) & is.finite(Reco),
       # umol CO2 m-2 s-1 -> g C m-2 per 30 min
-      GPP_gC = GPP * 1800 * 12 / 1e6,
-      Reco_gC = Reco * 1800 * 12 / 1e6,
-      NEE_gC = NEE * 1800 * 12 / 1e6
+      GPP_gC  = ifelse(ok, GPP  * 1800 * 12 / 1e6, 0),
+      Reco_gC = ifelse(ok, Reco * 1800 * 12 / 1e6, 0)
     ) %>%
     group_by(Date) %>%
     summarise(
-      GPP_daily = sum(ifelse(is.finite(GPP_gC), GPP_gC, 0), na.rm = TRUE),
-      Reco_daily = sum(ifelse(is.finite(Reco_gC), Reco_gC, 0), na.rm = TRUE),
-      NEE_daily = sum(ifelse(is.finite(NEE_gC), NEE_gC, 0), na.rm = TRUE),
+      GPP_daily  = sum(GPP_gC,  na.rm = TRUE),
+      Reco_daily = sum(Reco_gC, na.rm = TRUE),
+      n_ok       = sum(ok, na.rm = TRUE),
       .groups = "drop"
-    )
+    ) %>%
+    # NEE = Reco - GPP (гарантирует баланс)
+    mutate(NEE_daily = Reco_daily - GPP_daily)
 
   if (nrow(daily) == 0) {
     return(tibble(
@@ -2604,6 +2609,7 @@ calculate_cumulative_fluxes <- function(df, sowing_date = NULL, harvest_date = N
       GPP_daily = numeric(),
       Reco_daily = numeric(),
       NEE_daily = numeric(),
+      n_ok = integer(),
       GPP_cum = numeric(),
       Reco_cum = numeric(),
       NEE_cum = numeric()
@@ -2617,9 +2623,10 @@ calculate_cumulative_fluxes <- function(df, sowing_date = NULL, harvest_date = N
   daily_complete <- complete_dates %>%
     left_join(daily, by = "Date") %>%
     mutate(
-      GPP_daily = ifelse(is.na(GPP_daily), 0, GPP_daily),
+      GPP_daily  = ifelse(is.na(GPP_daily),  0, GPP_daily),
       Reco_daily = ifelse(is.na(Reco_daily), 0, Reco_daily),
-      NEE_daily = ifelse(is.na(NEE_daily), 0, NEE_daily)
+      n_ok       = ifelse(is.na(n_ok), 0L, n_ok),
+      NEE_daily  = Reco_daily - GPP_daily  # гарантия баланса
     )
 
   if (!is.null(sowing_date)) {
@@ -2772,6 +2779,18 @@ log_debug_agent(
 # endregion
 
 print(cumulative_summary)
+
+# Проверка баланса: NEE_total == Reco_total - GPP_total
+cat("\nПроверка баланса NEE = Reco - GPP:\n")
+cumulative_summary %>%
+  mutate(
+    NEE_check = Reco_total_gC - GPP_total_gC,
+    delta     = NEE_total_gC - NEE_check,
+    ok        = abs(delta) < 1e-6
+  ) %>%
+  select(Year, GPP_total_gC, Reco_total_gC, NEE_total_gC, NEE_check, delta, ok) %>%
+  print()
+cat("(delta должен быть ~0 для каждого года)\n\n")
 
 # Добавим суммы активных температур
 gdd_summary <- gdd_all %>%
