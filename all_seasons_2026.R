@@ -468,7 +468,9 @@ df23 <- d23_avg %>%
     NEE = nee,
     GPP = gpp,
     Reco = reco,
-    PPFD = ppfd,
+    # PPFD: приоритет ppfd_f из метеофайла, fallback на ppfd из d23_avg
+    PPFD = ifelse(is.finite(ppfd_f), ppfd_f,
+                  if ("ppfd" %in% names(.)) ppfd else NA_real_),
     Rg = rg_f,
     # Метеопеременные из второго файла (приоритет для _f)
     LE = le_f,
@@ -1755,6 +1757,139 @@ gppmax_csv <- coef_tbl_detailed %>%
 readr::write_csv(gppmax_csv, "GPPmax_by_year_phase.csv")
 cat("\n✓ Таблица GPPmax сохранена: GPPmax_by_year_phase.csv\n")
 cat("\n========================================\n\n")
+
+# ==============================================================================
+# МЕЖГОДОВЫЕ (POOLED) КОЭФФИЦИЕНТЫ α И GPPmax: АППРОКСИМАЦИЯ ПО ВСЕМ 3 ГОДАМ
+# ==============================================================================
+# Вместо усреднения α и β по трем годам, объединяем все наблюдения
+# каждой фенофазы за 3 года и фитируем ОДНУ световую кривую.
+# Это дает устойчивые «среднеклиматические» параметры.
+# ==============================================================================
+
+cat("\n========================================\n")
+cat("МЕЖГОДОВЫЕ (POOLED) КОЭФФИЦИЕНТЫ α И GPPmax\n")
+cat("Аппроксимация объединённых данных 3 лет для каждой фенофазы\n")
+cat("========================================\n\n")
+
+# 1) Фит по объединённым данным (group_by Phase_lab ONLY, без Year)
+coef_pooled <- light_all %>%
+  group_by(Phase_lab) %>%
+  group_modify(~fit_lrc_rg_with_stats(.x)) %>%
+  ungroup() %>%
+  mutate(
+    GPPmax = beta,
+    GPPmax_ci5_lower = beta_ci5_lower,
+    GPPmax_ci5_upper = beta_ci5_upper,
+    method = "pooled_3yr_fit"
+  )
+
+cat("Результаты межгодовой аппроксимации (pooled fit):\n\n")
+coef_pooled %>%
+  mutate(
+    alpha_fmt = ifelse(is.finite(alpha), sprintf("%.4f", alpha), "н/д"),
+    GPPmax_fmt = ifelse(is.finite(GPPmax), sprintf("%.2f", GPPmax), "н/д"),
+    r2_fmt = ifelse(is.finite(r2), sprintf("%.3f", r2), "н/д"),
+    rmse_fmt = ifelse(is.finite(rmse), sprintf("%.3f", rmse), "н/д"),
+    ci_fmt = ifelse(is.finite(GPPmax_ci5_lower),
+                    sprintf("[%.2f; %.2f]", GPPmax_ci5_lower, GPPmax_ci5_upper), "н/д")
+  ) %>%
+  select(Phase_lab, alpha_fmt, GPPmax_fmt, ci_fmt, n_points, r2_fmt, rmse_fmt, status) %>%
+  print(n = Inf)
+
+# 2) Сравнение: усреднённые vs pooled
+cat("\nСравнение подходов (averaged vs pooled fit):\n\n")
+avg_by_phase <- coef_tbl_detailed %>%
+  filter(is.finite(alpha), is.finite(GPPmax)) %>%
+  group_by(Phase_lab) %>%
+  summarise(
+    alpha_avg = mean(alpha, na.rm = TRUE),
+    GPPmax_avg = mean(GPPmax, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+comparison <- coef_pooled %>%
+  select(Phase_lab, alpha_pooled = alpha, GPPmax_pooled = GPPmax, r2_pooled = r2) %>%
+  left_join(avg_by_phase, by = "Phase_lab") %>%
+  mutate(
+    alpha_diff_pct  = ifelse(is.finite(alpha_avg) & alpha_avg != 0,
+                              (alpha_pooled - alpha_avg) / alpha_avg * 100, NA_real_),
+    GPPmax_diff_pct = ifelse(is.finite(GPPmax_avg) & GPPmax_avg != 0,
+                              (GPPmax_pooled - GPPmax_avg) / GPPmax_avg * 100, NA_real_)
+  )
+
+comparison %>%
+  mutate(
+    across(c(alpha_pooled, alpha_avg), ~sprintf("%.4f", .x)),
+    across(c(GPPmax_pooled, GPPmax_avg), ~sprintf("%.2f", .x)),
+    r2_pooled = sprintf("%.3f", r2_pooled),
+    alpha_diff_pct = sprintf("%+.1f%%", alpha_diff_pct),
+    GPPmax_diff_pct = sprintf("%+.1f%%", GPPmax_diff_pct)
+  ) %>%
+  select(Phase_lab, alpha_pooled, alpha_avg, alpha_diff_pct,
+         GPPmax_pooled, GPPmax_avg, GPPmax_diff_pct, r2_pooled) %>%
+  print(n = Inf)
+
+# 3) Pooled кривые для графика
+curve_pooled <- coef_pooled %>%
+  filter(is.finite(alpha), is.finite(beta)) %>%
+  rowwise() %>%
+  mutate(
+    data = list({
+      xs_ppfd <- seq(0, 2000, length.out = 200)
+      xs_rg   <- bigleaf::PPFD.to.Rg(xs_ppfd)
+      tibble(PPFD = xs_ppfd,
+             GPP_hat = (alpha * beta * xs_rg) / (alpha * xs_rg + beta))
+    })
+  ) %>%
+  ungroup() %>%
+  tidyr::unnest(data) %>%
+  select(Phase_lab, PPFD, GPP_hat)
+
+# 4) График: погодовые + pooled (чёрная жирная)
+anno_pooled <- coef_pooled %>%
+  filter(is.finite(alpha), is.finite(GPPmax)) %>%
+  mutate(
+    x = x_pad,
+    y = y_max_fixed - top_pad - 3 * y_step,  # 4-я строка (после 3 годов)
+    label = sprintf("Pooled: α = %s  GPPmax = %s",
+                    fmt_num(alpha), fmt_num(GPPmax))
+  )
+
+p_pooled <- ggplot() +
+  geom_point(data = light_all, aes(PPFD, GPP, color = factor(Year)),
+             alpha = 0.2, size = 0.8) +
+  geom_line(data = curve_tbl, aes(PPFD, GPP_hat, color = factor(Year)),
+            linewidth = 0.8, alpha = 0.7) +
+  geom_line(data = curve_pooled, aes(PPFD, GPP_hat),
+            color = "black", linewidth = 1.4, linetype = "solid") +
+  geom_text(data = anno_fixed, aes(x = x, y = y, label = label, color = factor(Year)),
+            hjust = 0, vjust = 1, size = 3.2, fontface = "bold") +
+  geom_text(data = anno_pooled, aes(x = x, y = y, label = label),
+            color = "black", hjust = 0, vjust = 1, size = 3.2, fontface = "bold") +
+  facet_wrap(~Phase_lab, ncol = 3, scales = "fixed") +
+  scale_color_manual(values = pal_year, name = "Год") +
+  scale_y_continuous(limits = c(0, y_max_fixed), breaks = y_breaks,
+                     expand = expansion(mult = c(0, 0.02))) +
+  labs(title = "Световые кривые: погодовые + межгодовая аппроксимация (pooled, чёрная)",
+       x = "PPFD (µmol photons m⁻² s⁻¹)",
+       y = "GPP (µmol CO₂ m⁻² s⁻¹)") +
+  theme_base
+
+print(p_pooled)
+# ggsave("lightRG_pooled_vs_yearly.png", p_pooled, width=14, height=9, dpi=300, bg="white")
+
+# 5) Сохранение
+readr::write_csv(
+  coef_pooled %>%
+    mutate(Phase_en = PHASE6_EN[match(as.character(Phase_lab), PHASE6_RU)]) %>%
+    select(Phase_lab, Phase_en, alpha,
+           alpha_ci5_lower, alpha_ci5_upper,
+           GPPmax, GPPmax_ci5_lower, GPPmax_ci5_upper,
+           n_points, r2, rmse, status, method),
+  "light_response_coefficients_pooled.csv"
+)
+cat("\n✓ Межгодовые pooled-коэффициенты сохранены: light_response_coefficients_pooled.csv\n")
+cat("========================================\n\n")
 
 # ==============================================================================
 # ТАБЛИЦА ДНЕВНЫХ ЗНАЧЕНИЙ PPFD ПО ВСЕМ ТРЕМ ГОДАМ
