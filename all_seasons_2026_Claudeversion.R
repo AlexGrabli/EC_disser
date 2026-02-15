@@ -1,0 +1,2855 @@
+# ======================================================================
+# Полный скрипт: межсезонное сравнение (Москва). Версия подписей на русском и английском языках
+# ======================================================================
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(lubridate)
+  library(janitor)
+  library(stringr)
+  library(bigleaf)
+  library(tidyr)
+})
+
+# ----------------------- Константы фаз -----------------------
+PHASE6_EN <- c("Emergence","Tillering","StemElong","Heading","Flowering","Ripening")
+PHASE6_RU <- c("Всходы","Кущение","Выход в трубку","Колошение","Цветение","Созревание")
+
+# Границы фаз по датам (6 фаз + Harvesting для отсечки)
+B2013 <- list(
+  Sowing="2013-05-14", Emergence="2013-05-17", Tillering="2013-06-03",
+  StemElong="2013-06-27", Heading="2013-07-17", Flowering="2013-07-28",
+  Ripening="2013-08-03", Harvesting="2013-08-14"
+)
+B2016 <- list(
+  Sowing="2016-05-11", Emergence="2016-05-15", Tillering="2016-05-22",
+  StemElong="2016-06-08", Heading="2016-06-22", Flowering="2016-06-30",
+  Ripening="2016-08-12", Harvesting="2016-08-27"
+)
+B2023 <- list(
+  Sowing="2023-05-18", Emergence="2023-05-26", Tillering="2023-06-07",
+  StemElong="2023-06-29", Heading="2023-07-14", Flowering="2023-07-20",
+  Ripening="2023-08-06", Harvesting="2023-08-31"
+)
+
+# ----------------------- Словарь подписей для графиков -----------------------
+# Двуязычные подписи: RU и EN версии
+LABELS <- list(
+  ru = list(
+    # Фенофазы
+    phases = c("Всходы", "Кущение", "Выход в трубку", "Колошение", "Цветение", "Созревание"),
+
+    # Оси
+    year = "Год",
+    date = "Дата",
+    hour = "Час суток",
+    days_from_sowing = "Дни от сева",
+    phenophase = "Фенофаза",
+
+    # Переменные
+    gpp = "GPP",
+    reco = "Reco",
+    nee = "NEE",
+    wue = "WUE",
+    iwue = "iWUE",
+    vpd = "VPD",
+    ppfd = "PPFD",
+    gdd = "Сумма активных температур",
+
+    # Единицы измерения
+    flux_unit = "мкмоль CO₂ м⁻² с⁻¹",
+    wue_unit = "мкмоль CO₂ / ммоль H₂O",
+    iwue_unit = "мкмоль CO₂ кПа / ммоль H₂O",
+    vpd_unit = "кПа",
+    ppfd_unit = "мкмоль м⁻² с⁻¹",
+    gdd_unit = "°C·день",
+    cumulative_c_unit = "г C м⁻²",
+
+    # Заголовки графиков
+    diurnal_title = "Суточный ход",
+    wue_by_phase = "WUE по фенофазам",
+    iwue_by_phase = "iWUE по фенофазам",
+    wue_comparison = "WUE — сравнение между годами",
+    iwue_comparison = "iWUE — сравнение между годами",
+    gpp_vs_vpd = "Зависимость GPP от VPD по фенофазам",
+    gpp_vs_ppfd = "Зависимость GPP от PPFD по фенофазам",
+    cumulative_gpp = "Кумулятивный GPP по дням вегетационного периода",
+    cumulative_reco = "Кумулятивный Reco по дням вегетационного периода",
+    cumulative_nee = "Кумулятивный NEE по дням вегетационного периода",
+    cumulative_gdd = "Кумулятивная сумма активных температур >10°C",
+    light_curves = "Световые кривые фотосинтеза",
+    phase_lines_note = "Вертикальные линии — начало фенофаз",
+    nee_note = "Отрицательные значения = поглощение CO₂"
+  ),
+
+  en = list(
+    # Phenophases
+    phases = c("Emergence", "Tillering", "Stem elongation", "Heading", "Flowering", "Ripening"),
+
+    # Axes
+    year = "Year",
+    date = "Date",
+    hour = "Hour of day",
+    days_from_sowing = "Days from sowing",
+    phenophase = "Phenophase",
+
+    # Variables
+    gpp = "GPP",
+    reco = "Reco",
+    nee = "NEE",
+    wue = "WUE",
+    iwue = "iWUE",
+    vpd = "VPD",
+    ppfd = "PPFD",
+    gdd = "Growing degree days",
+
+    # Units
+    flux_unit = "µmol CO₂ m⁻² s⁻¹",
+    wue_unit = "µmol CO₂ / mmol H₂O",
+    iwue_unit = "µmol CO₂ kPa / mmol H₂O",
+    vpd_unit = "kPa",
+    ppfd_unit = "µmol m⁻² s⁻¹",
+    gdd_unit = "°C·day",
+    cumulative_c_unit = "g C m⁻²",
+
+    # Plot titles
+    diurnal_title = "Diurnal pattern",
+    wue_by_phase = "WUE by phenophase",
+    iwue_by_phase = "iWUE by phenophase",
+    wue_comparison = "WUE — comparison between years",
+    iwue_comparison = "iWUE — comparison between years",
+    gpp_vs_vpd = "GPP vs VPD by phenophase",
+    gpp_vs_ppfd = "GPP vs PPFD by phenophase",
+    cumulative_gpp = "Cumulative GPP by days of growing season",
+    cumulative_reco = "Cumulative Reco by days of growing season",
+    cumulative_nee = "Cumulative NEE by days of growing season",
+    cumulative_gdd = "Cumulative growing degree days >10°C",
+    light_curves = "Light response curves",
+    phase_lines_note = "Vertical lines indicate phenophase onset",
+    nee_note = "Negative values indicate CO₂ absorption"
+  )
+)
+
+# Функция для получения подписи
+get_label <- function(key, lang = "ru") {
+  LABELS[[lang]][[key]]
+}
+
+# Функция для сохранения графика на двух языках
+save_bilingual <- function(plot_func, base_name, width = 10, height = 6, dpi = 300) {
+  for (lang in c("ru", "en")) {
+    p <- plot_func(lang)
+    fname <- paste0(base_name, "_", lang, ".png")
+    ggsave(fname, p, width = width, height = height, dpi = dpi, bg = "white")
+  }
+}
+
+# ----------------------- Утилиты -----------------------
+to_num <- function(x){
+  if (is.numeric(x)) return(x)
+  if (is.factor(x)) x <- as.character(x)
+  x <- gsub(",", ".", trimws(x), fixed = TRUE)
+  suppressWarnings(as.numeric(x))
+}
+safe_num <- to_num
+
+pick_first_present <- function(nm, candidates){
+  cand <- intersect(candidates, nm)
+  if (length(cand)) cand[1] else NA_character_
+}
+
+first_or_stop <- function(df, candidates, label = "колонку"){
+  col <- pick_first_present(names(df), candidates)
+  if (is.na(col)) stop(sprintf("Не нашли %s. Искали: %s",
+                               label, paste(candidates, collapse=", ")))
+  col
+}
+
+fmt_num <- function(x) ifelse(is.finite(x), formatC(x, format="f", digits=2), "н/д")
+
+pick_col <- function(nm, pats){
+  for (p in pats){ 
+    hit <- grep(paste0("^",p,"$"), nm, ignore.case=TRUE, value=TRUE)
+    if (length(hit)) return(hit[1]) 
+  }
+  low <- tolower(nm)
+  for (p in pats){ 
+    hit <- nm[str_detect(low, tolower(p))]
+    if (length(hit)) return(hit[1]) 
+  }
+  NA_character_
+}
+
+# ======= Парсинг времени =======
+parse_with_formats <- function(x, fmts, tz="UTC"){
+  xch <- as.character(x)
+  for (f in fmts){
+    out <- suppressWarnings(as.POSIXct(strptime(xch, format=f, tz=tz)))
+    if (sum(!is.na(out)) > 0) return(out)
+  }
+  rep(as.POSIXct(NA, tz=tz), length(xch))
+}
+
+parse_compact_12_14 <- function(x, tz="UTC"){
+  xch <- gsub("[^0-9]", "", as.character(x))
+  n <- nchar(xch)
+  out <- rep(as.POSIXct(NA, tz=tz), length(xch))
+  idx14 <- which(n == 14); if (length(idx14)) out[idx14] <- suppressWarnings(as.POSIXct(strptime(xch[idx14], "%Y%m%d%H%M%S", tz=tz)))
+  idx12 <- which(n == 12); if (length(idx12)) out[idx12] <- suppressWarnings(as.POSIXct(strptime(xch[idx12], "%Y%m%d%H%M",   tz=tz)))
+  out
+}
+
+parse_iso_simple <- function(x, tz="UTC"){
+  xch <- as.character(x)
+  xch <- gsub("Z$", "", xch, ignore.case = TRUE)
+  xch <- gsub("T", " ", xch, fixed = TRUE)
+  parse_with_formats(xch,
+                     c("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+                       "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M",
+                       "%Y.%m.%d %H:%M:%S", "%Y.%m.%d %H:%M",
+                       "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"),
+                     tz=tz)
+}
+
+parse_dmy_simple <- function(x, tz="UTC"){
+  parse_with_formats(x,
+                     c("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M",
+                       "%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M",
+                       "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M",
+                       "%d.%m.%Y", "%d-%m-%Y", "%d/%m/%Y"),
+                     tz=tz)
+}
+
+best_time_from_candidates <- function(df, tz="UTC"){
+  nm <- names(df)
+  pref <- c("timestamp_start","timestamp_end","datetime","datetime_1",
+            "date_time","date_time_1","date","time","time_utc")
+  cand <- union(intersect(pref, nm), nm[str_detect(nm, "(date|time|stamp)")])
+  if (!length(cand)) return(rep(as.POSIXct(NA, tz=tz), nrow(df)))
+
+  best_out <- rep(as.POSIXct(NA, tz=tz), nrow(df)); best_n <- -1L
+  for (cn in cand){
+    v <- df[[cn]]
+    out <- rep(as.POSIXct(NA, tz=tz), length(v))
+
+    if (is.numeric(v) && suppressWarnings(max(v, na.rm=TRUE) > 1e9)) {
+      out <- as.POSIXct(v, origin="1970-01-01", tz=tz)
+    } else {
+      out <- parse_compact_12_14(v, tz=tz)
+      if (all(is.na(out))) out <- parse_iso_simple(v, tz=tz)
+      if (all(is.na(out))) out <- parse_dmy_simple(v, tz=tz)
+      if (all(is.na(out))) out <- suppressWarnings(ymd_hms(v, tz=tz, quiet=TRUE))
+      if (all(is.na(out))) out <- suppressWarnings(ymd_hm(v,  tz=tz, quiet=TRUE))
+      if (all(is.na(out))) out <- suppressWarnings(dmy_hms(v, tz=tz, quiet=TRUE))
+      if (all(is.na(out))) out <- suppressWarnings(dmy_hm(v,  tz=tz, quiet=TRUE))
+      if (all(is.na(out))) out <- suppressWarnings(ymd(v,     tz=tz, quiet=TRUE))
+      if (all(is.na(out))) out <- suppressWarnings(dmy(v,     tz=tz, quiet=TRUE))
+    }
+
+    n_ok <- sum(!is.na(out))
+    if (n_ok > best_n){
+      best_n <- n_ok
+      best_out <- out
+      if (best_n == length(v)) break
+    }
+  }
+  best_out
+}
+
+force_year <- function(dt, year_ref){
+  if (all(is.na(dt))) return(dt)
+  y <- suppressWarnings(lubridate::year(dt))
+  y_med <- suppressWarnings(stats::median(y, na.rm = TRUE))
+  if (is.finite(y_med) && as.integer(round(y_med)) != year_ref) {
+    return(update(dt, year = year_ref))
+  }
+  dt
+}
+
+# назначение 6 фаз по интервалам
+phase_by_bounds <- function(date_vec, bounds){
+  e  <- as.Date(bounds$Emergence); t  <- as.Date(bounds$Tillering)
+  s  <- as.Date(bounds$StemElong); h  <- as.Date(bounds$Heading)
+  f  <- as.Date(bounds$Flowering); r  <- as.Date(bounds$Ripening)
+  hv <- as.Date(bounds$Harvesting)
+  res <- rep(NA_character_, length(date_vec))
+  res[ date_vec >= e  & date_vec <  t ] <- "Emergence"
+  res[ date_vec >= t  & date_vec <  s ] <- "Tillering"
+  res[ date_vec >= s  & date_vec <  h ] <- "StemElong"
+  res[ date_vec >= h  & date_vec <  f ] <- "Heading"
+  res[ date_vec >= f  & date_vec <  r ] <- "Flowering"
+  res[ date_vec >= r  & date_vec <= hv] <- "Ripening"
+  factor(res, levels = PHASE6_EN)
+}
+
+# Страховка, т.к. часто пропадало кущение из-за кривых дат или нехватки данных
+fix_tillering_if_missing <- function(df, bounds){
+  if (!all(c("Date","Phase") %in% names(df))) return(df)
+  if (sum(df$Phase == "Tillering", na.rm = TRUE) == 0) {
+    t0 <- as.Date(bounds$Tillering); s0 <- as.Date(bounds$StemElong)
+    sel <- which(!is.na(df$Date) & df$Date >= t0 & df$Date < s0)
+    if (length(sel)) df$Phase[sel] <- "Tillering"
+  }
+  df
+}
+
+# Сборщик года (2013/2016): время + потоки + фазы
+build_year_df <- function(raw, year, bounds, tz_in="UTC", shift_hours=0L){
+  nm <- names(raw)
+  dt <- best_time_from_candidates(raw, tz=tz_in)
+
+  # Fallback: DOY + (hhmm|hour|minute)
+  if (all(is.na(dt)) && "doy" %in% nm){
+    H <- if ("hour" %in% nm) as.integer(raw$hour) else 0L
+    M <- if ("minute" %in% nm) as.integer(raw$minute) else 0L
+    if ("hhmm" %in% nm) { hh <- suppressWarnings(as.integer(raw$hhmm)); H <- floor(hh/100); M <- hh %% 100 }
+    base <- as.Date(pmax(1L, pmin(366L, as.integer(raw$doy))) - 1L, origin = sprintf("%04d-01-01", year))
+    dt <- as.POSIXct(base, tz=tz_in) + H*3600 + M*60
+  }
+
+  dt <- force_year(dt, year)
+  if (shift_hours != 0L && any(!is.na(dt))) dt <- dt + hours(shift_hours)
+
+  # Объединенные списки поиска столбцов (из обеих веток)
+  col_gpp  <- pick_col(nm, c("gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u50","gpp_u_star_f","gpp_f","gpp"))
+  col_reco <- pick_col(nm, c("reco_dt_u50","reco_dt_u_star","reco_u50_f","reco_u50","reco_u_star_f","er","reco","reco_f"))
+  col_nee  <- pick_col(nm, c("nee_u50_f","nee_u50","nee_u_star_f","nee_filled","nee","fc"))
+
+  # Добавляем поиск метеопеременных (приоритет для _f - заполненных данных)
+  col_le   <- pick_col(nm, c("LE_f","le_f","LE","le","le_orig","le_u50_f","le_u_star_f"))
+  col_h    <- pick_col(nm, c("H_f","h_f","H","h","h_orig","h_u50_f","h_u_star_f"))
+  col_tair <- pick_col(nm, c("Tair_f","tair_f","Tair","tair","air_temperature","ta"))
+  col_vpd  <- pick_col(nm, c("VPD_f","vpd_f","VPD","vpd","vpd_orig"))
+  col_rh   <- pick_col(nm, c("RH_f","rh_f","RH","rh","r_h"))
+  col_ppfd <- pick_col(nm, c("PPFD_f","ppfd_f","PPFD","ppfd","ppfd_mean","ppfd_orig"))
+  col_rg   <- pick_col(nm, c("Rg_f","rg_f","Rg","rg","rg_orig","sw_in","sr01dn_avg"))
+
+  # Диагностика: какие столбцы найдены и какие данные в них
+  cat(sprintf("\n=== Диагностика build_year_df для %d ===\n", year))
+  cat(sprintf("  Найденные столбцы потоков:\n"))
+  cat(sprintf("    GPP:  %s\n", ifelse(is.na(col_gpp), "НЕ НАЙДЕН", col_gpp)))
+  cat(sprintf("    Reco: %s\n", ifelse(is.na(col_reco), "НЕ НАЙДЕН", col_reco)))
+  cat(sprintf("    NEE:  %s\n", ifelse(is.na(col_nee), "НЕ НАЙДЕН", col_nee)))
+  cat(sprintf("  Найденные столбцы метео:\n"))
+  cat(sprintf("    LE:   %s\n", ifelse(is.na(col_le), "НЕ НАЙДЕН", col_le)))
+  cat(sprintf("    H:    %s\n", ifelse(is.na(col_h), "НЕ НАЙДЕН", col_h)))
+  cat(sprintf("    Tair: %s\n", ifelse(is.na(col_tair), "НЕ НАЙДЕН", col_tair)))
+  cat(sprintf("    VPD:  %s\n", ifelse(is.na(col_vpd), "НЕ НАЙДЕН", col_vpd)))
+  cat(sprintf("    RH:   %s\n", ifelse(is.na(col_rh), "НЕ НАЙДЕН", col_rh)))
+  cat(sprintf("    PPFD: %s\n", ifelse(is.na(col_ppfd), "НЕ НАЙДЕН", col_ppfd)))
+  cat(sprintf("    Rg:   %s\n", ifelse(is.na(col_rg), "НЕ НАЙДЕН", col_rg)))
+
+  if (!is.na(col_gpp)) {
+    cat(sprintf("  Сырые значения GPP (первые 5): %s\n", paste(head(raw[[col_gpp]], 5), collapse=", ")))
+    cat(sprintf("  Тип столбца GPP: %s\n", class(raw[[col_gpp]])[1]))
+  }
+
+  GPP  <- if (!is.na(col_gpp))  to_num(raw[[col_gpp]])  else rep(NA_real_, nrow(raw))
+  Reco <- if (!is.na(col_reco)) to_num(raw[[col_reco]]) else rep(NA_real_, nrow(raw))
+  NEE  <- if (!is.na(col_nee))  to_num(raw[[col_nee]])  else Reco - GPP
+  if (all(is.na(NEE)) && any(is.finite(GPP)) && any(is.finite(Reco))) NEE <- Reco - GPP
+
+  # Преобразование метеопеременных
+  LE   <- if (!is.na(col_le))   to_num(raw[[col_le]])   else rep(NA_real_, nrow(raw))
+  H    <- if (!is.na(col_h))    to_num(raw[[col_h]])    else rep(NA_real_, nrow(raw))
+  Tair <- if (!is.na(col_tair)) to_num(raw[[col_tair]]) else rep(NA_real_, nrow(raw))
+  VPD  <- if (!is.na(col_vpd))  to_num(raw[[col_vpd]])  else rep(NA_real_, nrow(raw))
+  RH   <- if (!is.na(col_rh))   to_num(raw[[col_rh]])   else rep(NA_real_, nrow(raw))
+  PPFD <- if (!is.na(col_ppfd)) to_num(raw[[col_ppfd]]) else rep(NA_real_, nrow(raw))
+  Rg   <- if (!is.na(col_rg))   to_num(raw[[col_rg]])   else rep(NA_real_, nrow(raw))
+
+  # Расчет WUE (Water Use Efficiency) = GPP / LE
+  # LE переводим из W/m2 в mmol/m2/s: LE_W / 2.45 (latent heat) / 18 (molar mass H2O) * 1000
+  # Упрощенно: WUE = GPP (µmol CO2 m-2 s-1) / (LE * 22.7) где LE в W m-2
+  # Более точно: WUE = GPP / ET, где ET = LE / lambda (lambda ~ 2.45 MJ/kg)
+  WUE <- ifelse(LE > 0 & is.finite(LE) & is.finite(GPP),
+                GPP / (LE * 0.408),  # 0.408 = 1000 / (2.45 * 1000), переводит LE(W/m2) в ET(mmol/m2/s)
+                NA_real_)
+
+  # Диагностика после преобразования
+  cat(sprintf("  После to_num:\n"))
+  cat(sprintf("    GPP:  NA=%d, not-NA=%d, первые 5: %s\n",
+              sum(is.na(GPP)), sum(!is.na(GPP)), paste(head(GPP, 5), collapse=", ")))
+  cat(sprintf("    Reco: NA=%d, not-NA=%d\n", sum(is.na(Reco)), sum(!is.na(Reco))))
+  cat(sprintf("    NEE:  NA=%d, not-NA=%d\n", sum(is.na(NEE)), sum(!is.na(NEE))))
+  cat(sprintf("    LE:   NA=%d, not-NA=%d\n", sum(is.na(LE)), sum(!is.na(LE))))
+  cat(sprintf("    H:    NA=%d, not-NA=%d\n", sum(is.na(H)), sum(!is.na(H))))
+  cat(sprintf("    Tair: NA=%d, not-NA=%d\n", sum(is.na(Tair)), sum(!is.na(Tair))))
+  cat(sprintf("    WUE:  NA=%d, not-NA=%d\n", sum(is.na(WUE)), sum(!is.na(WUE))))
+  cat(sprintf("    PPFD: NA=%d, not-NA=%d\n", sum(is.na(PPFD)), sum(!is.na(PPFD))))
+  cat(sprintf("    Rg:   NA=%d, not-NA=%d\n", sum(is.na(Rg)), sum(!is.na(Rg))))
+
+  out <- tibble(
+    Year = year,
+    datetime = dt,
+    Date = as.Date(dt),
+    HourInt = pmin(23L, pmax(0L, hour(dt))),
+    NEE = NEE,
+    GPP = GPP,
+    Reco = Reco,
+    LE = LE,
+    H = H,
+    Tair = Tair,
+    VPD = VPD,
+    RH = RH,
+    WUE = WUE,
+    PPFD = PPFD,
+    Rg = Rg
+  )
+
+  # Фазы (строго 6, без «после уборки»)
+  out$Phase <- phase_by_bounds(out$Date, bounds)
+  out <- fix_tillering_if_missing(out, bounds)
+  out$Phase_lab <- factor(as.character(out$Phase), levels = PHASE6_EN, labels = PHASE6_RU)
+
+  # region agent log
+  log_debug_agent(
+    hypothesisId = "H1_build_year_df",
+    location = "all_seasons_2026_Claudeversion.R:374-393",
+    message = "build_year_df summary after parsing and phase assignment",
+    data_fields = list(
+      Year = year,
+      n_rows = nrow(out),
+      n_date_na = sum(is.na(out$Date)),
+      n_gpp_na = sum(is.na(out$GPP)),
+      n_nee_na = sum(is.na(out$NEE)),
+      n_wue_na = sum(is.na(out$WUE)),
+      n_phase_na = sum(is.na(out$Phase))
+    )
+  )
+  # endregion
+
+  out
+}
+
+# ----------------------- 2023: объединение двух файлов -----------------------
+# Файл 1: потоки CO2 и биомасса
+if (!exists("d23_avg") && file.exists("fluxes_2023_biomass_mean.csv")) {
+  d23_avg <- readr::read_csv("fluxes_2023_biomass_mean.csv", show_col_types = FALSE) |>
+    clean_names()
+  names(d23_avg) <- trimws(names(d23_avg))
+}
+
+# Файл 2: метеоданные с gap-filling
+meteo_file_2023 <- "ИТОГ2_BarleyFilledAllScen_65p_biom_thrash_new2505.csv"
+if (file.exists(meteo_file_2023)) {
+  cat("Загрузка метеоданных 2023 из:", meteo_file_2023, "\n")
+  # Автоопределение разделителя (файл может быть ; или , или \t)
+  .first_line <- readr::read_lines(meteo_file_2023, n_max = 1)
+  .meteo_delim <- if (str_detect(.first_line, "\t")) "\t" else if (str_detect(.first_line, ";")) ";" else ","
+  cat("  Определён разделитель:", dQuote(.meteo_delim), "\n")
+  d23_meteo <- readr::read_delim(
+    meteo_file_2023,
+    delim = .meteo_delim,
+    show_col_types = FALSE
+  ) |> clean_names()
+  names(d23_meteo) <- trimws(names(d23_meteo))
+  cat("  Столбцов:", ncol(d23_meteo), "- первые 5:", paste(head(names(d23_meteo), 5), collapse=", "), "\n")
+
+  # Приводим timestamp к POSIXct (формат: dd.mm.yyyy H:MM или dd.mm.yyyy)
+  # Ищем столбец timestamp (может называться по-разному после clean_names)
+  ts_col <- grep("timestamp|time_stamp", names(d23_meteo), ignore.case = TRUE, value = TRUE)[1]
+  if (is.na(ts_col)) ts_col <- names(d23_meteo)[1]  # fallback: первый столбец
+  cat("  Столбец времени в d23_meteo:", ts_col, "\n")
+  ts_vec <- d23_meteo[[ts_col]]
+  d23_meteo$datetime <- suppressWarnings(dmy_hm(ts_vec))
+  d23_meteo$datetime[is.na(d23_meteo$datetime)] <- suppressWarnings(
+    dmy(ts_vec[is.na(d23_meteo$datetime)])
+  )
+
+  cat("  ✓ Загружено", nrow(d23_meteo), "строк метеоданных\n")
+} else {
+  stop(paste("ОШИБКА: Файл с метеоданными 2023 не найден:", meteo_file_2023))
+}
+
+# Определяем временной столбец в d23_avg
+ts23_col <- dplyr::first(intersect(c("timestamp_msk","timestamp","datetime"), names(d23_avg)))
+stopifnot(length(ts23_col) == 1)
+
+# Объединяем два датасета по времени
+df23 <- d23_avg %>%
+  rename(datetime = !!rlang::sym(ts23_col)) %>%
+  mutate(datetime = as.POSIXct(datetime)) %>%
+  # Присоединяем метеоданные
+  left_join(
+    d23_meteo %>% select(datetime, 
+                        le_f, h_f, tair_f, vpd_f,
+                        rg_f, rn_f, ppfd_f),
+    by = "datetime"
+  ) %>%
+  mutate(
+    Year = 2023L,
+    Date = as.Date(datetime),
+    HourInt = pmin(23L, pmax(0L, hour(datetime))),
+    Phase_lab = factor(phase_lab, levels = PHASE6_RU),
+    NEE = nee,
+    GPP = gpp,
+    Reco = reco,
+    # PPFD: приоритет ppfd_f из метеофайла, fallback на ppfd из d23_avg
+    PPFD = ifelse(is.finite(ppfd_f), ppfd_f,
+                  if ("ppfd" %in% names(.)) ppfd else NA_real_),
+    Rg = rg_f,
+    # Метеопеременные из второго файла (приоритет для _f)
+    LE = le_f,
+    H = h_f,
+    Tair = tair_f,
+    VPD = vpd_f,
+    RH = NA_real_,  # RH нет в метеофайле
+    WUE = NA_real_  # Будет рассчитан позже
+  ) %>%
+  select(Year, datetime, Date, HourInt, Phase_lab, NEE, GPP, Reco, PPFD, Rg,
+         LE, H, Tair, VPD, RH, WUE)
+
+cat("  ✓ df23 создан:", nrow(df23), "строк\n")
+cat("  Метеоданные - NA counts:\n")
+cat("    LE:", sum(is.na(df23$LE)), "\n")
+cat("    H:", sum(is.na(df23$H)), "\n")
+cat("    Tair:", sum(is.na(df23$Tair)), "\n")
+cat("    VPD:", sum(is.na(df23$VPD)), "\n\n")
+
+readr::write_csv(
+  df23 %>%
+    select(datetime, Phase_lab, starts_with("PPFD"), matches("(?i)^gpp$|^gpp_"),
+           matches("(?i)^nee$|^nee_"), matches("(?i)^reco$|^reco_")) %>%
+    arrange(datetime),
+  "debug_df23_subset.csv"
+)
+
+# ----------------------- BIOMET meteo dynamics -----------------------
+parse_dt_guess <- function(x, tz = "UTC") {
+  xch <- trimws(as.character(x))
+  xch[xch == "" | xch == "NA"] <- NA_character_
+  out <- suppressWarnings(ymd_hms(xch, tz = tz, quiet = TRUE))
+  if (all(is.na(out))) out <- suppressWarnings(ymd_hm(xch, tz = tz, quiet = TRUE))
+  if (all(is.na(out))) out <- suppressWarnings(dmy_hms(xch, tz = tz, quiet = TRUE))
+  if (all(is.na(out))) out <- suppressWarnings(dmy_hm(xch, tz = tz, quiet = TRUE))
+  if (all(is.na(out))) out <- suppressWarnings(ymd(xch, tz = tz, quiet = TRUE))
+  if (all(is.na(out))) out <- suppressWarnings(dmy(xch, tz = tz, quiet = TRUE))
+  out
+}
+
+calc_vpd_kpa <- function(tair_c, rh_pct) {
+  rh_use <- rh_pct
+  rh_med <- suppressWarnings(stats::median(rh_use, na.rm = TRUE))
+  if (is.finite(rh_med) && rh_med <= 1.5) rh_use <- rh_use * 100
+  esat <- 0.6108 * exp((17.27 * tair_c) / (tair_c + 237.3))
+  esat * (1 - rh_use / 100)
+}
+
+mean_or_na <- function(x) {
+  if (all(!is.finite(x))) return(NA_real_)
+  mean(x, na.rm = TRUE)
+}
+
+mean_pos_or_na <- function(x, min_val = 10) {
+  x_use <- x[is.finite(x) & x > min_val]
+  if (!length(x_use)) return(NA_real_)
+  mean(x_use, na.rm = TRUE)
+}
+
+roll_mean_index <- function(x, idx, days_window) {
+  if (!requireNamespace("slider", quietly = TRUE)) {
+    return(rep(NA_real_, length(x)))
+  }
+  slider::slide_index_dbl(
+    x,
+    idx,
+    ~mean(.x, na.rm = TRUE),
+    .before = lubridate::days(days_window - 1),
+    .complete = FALSE
+  )
+}
+
+sum_or_na <- function(x) {
+  if (all(!is.finite(x))) return(NA_real_)
+  sum(x, na.rm = TRUE)
+}
+
+get_biomet_datetime <- function(raw, year = NA_integer_,
+                                date_col = NA_character_,
+                                time_col = NA_character_) {
+  nm <- names(raw)
+  if (is.na(date_col)) {
+    date_col <- pick_col(nm, c("DateTime", "TIMESTAMP", "timestamp", "datetime",
+                               "date_time", "DATE_1", "date"))
+  }
+  if (is.na(time_col)) {
+    time_col <- pick_col(nm, c("TIME_1", "time"))
+  }
+  if (!is.na(date_col) && !is.na(time_col) && date_col != time_col &&
+      date_col %in% nm && time_col %in% nm) {
+    dt <- parse_dt_guess(paste(raw[[date_col]], raw[[time_col]]))
+  } else if (!is.na(date_col) && date_col %in% nm) {
+    dt <- parse_dt_guess(raw[[date_col]])
+  } else {
+    dt <- best_time_from_candidates(raw, tz = "UTC")
+  }
+  if (!is.na(year)) dt <- force_year(dt, year)
+  dt
+}
+
+load_biomet_data <- function(path, year = NA_integer_,
+                             date_col = NA_character_,
+                             time_col = NA_character_) {
+  if (!file.exists(path)) {
+    cat(sprintf("  !! Biomet file not found: %s\n", path))
+    return(NULL)
+  }
+
+  first_line <- readr::read_lines(path, n_max = 1)
+  delim <- ifelse(str_detect(first_line, ";"), ";", ",")
+  raw <- readr::read_delim(path, delim = delim, show_col_types = FALSE)
+  names(raw) <- trimws(names(raw))
+
+  dt <- get_biomet_datetime(raw, year = year, date_col = date_col, time_col = time_col)
+  raw <- raw %>%
+    mutate(DateTime = dt) %>%
+    filter(!is.na(DateTime))
+
+  nm <- names(raw)
+  tair_col <- pick_col(nm, c("tair", "airtc_avg", "air_temperature", "ta_1_1_1", "ta"))
+  rh_col <- pick_col(nm, c("rh", "rh_1_1_1", "relative_humidity"))
+  vpd_col <- pick_col(nm, c("vpd", "vpd_1_1_1"))
+  svp_col <- pick_col(nm, c("svp_kpa", "svp"))
+  vp_col <- pick_col(nm, c("vp_kpa", "vp"))
+  ppfd_col <- pick_col(nm, c("ppfd", "ppfd_in", "par_den", "par"))
+  rg_col <- pick_col(nm, c("sr01dn_avg", "sw_in", "sw_in_1_1_1", "rg", "global"))
+  precip_col <- pick_col(nm, c("rain_mm_tot", "rain", "precip", "precipitation", "p_1_1_1"))
+
+  tsoil_cols <- nm[str_detect(tolower(nm), "tsoil|ts_")]
+  swc_cols <- nm[str_detect(tolower(nm), "vwc|swc|soil.*moisture")]
+
+  tair_val <- if (!is.na(tair_col)) to_num(raw[[tair_col]]) else NA_real_
+  rh_val <- if (!is.na(rh_col)) to_num(raw[[rh_col]]) else NA_real_
+  vpd_val <- if (!is.na(vpd_col)) to_num(raw[[vpd_col]]) else NA_real_
+
+  if (all(is.na(vpd_val)) && !is.na(svp_col) && !is.na(vp_col)) {
+    vpd_val <- to_num(raw[[svp_col]]) - to_num(raw[[vp_col]])
+  }
+  if (all(is.na(vpd_val)) && any(is.finite(tair_val)) && any(is.finite(rh_val))) {
+    vpd_val <- calc_vpd_kpa(tair_val, rh_val)
+  }
+  vpd_med <- suppressWarnings(stats::median(vpd_val, na.rm = TRUE))
+  if (is.finite(vpd_med) && vpd_med > 20) vpd_val <- vpd_val / 1000
+  vpd_val <- ifelse(is.finite(vpd_val) & vpd_val < 0, NA_real_, vpd_val)
+
+  ppfd_val <- if (!is.na(ppfd_col)) to_num(raw[[ppfd_col]]) else NA_real_
+  if (all(is.na(ppfd_val)) && !is.na(rg_col)) {
+    ppfd_val <- to_num(raw[[rg_col]]) * 2.02
+  }
+
+  tsoil_val <- NA_real_
+  if (length(tsoil_cols) > 0) {
+    tsoil_mat <- do.call(cbind, lapply(tsoil_cols, function(c) to_num(raw[[c]])))
+    tsoil_val <- rowMeans(tsoil_mat, na.rm = TRUE)
+    tsoil_val[!is.finite(tsoil_val)] <- NA_real_
+  }
+
+  swc_val <- NA_real_
+  if (length(swc_cols) > 0) {
+    swc_mat <- do.call(cbind, lapply(swc_cols, function(c) to_num(raw[[c]])))
+    swc_val <- rowMeans(swc_mat, na.rm = TRUE)
+    swc_val[!is.finite(swc_val)] <- NA_real_
+  }
+
+  precip_val <- NA_real_
+  if (!is.na(precip_col)) {
+    precip_val <- to_num(raw[[precip_col]])
+    if (!str_detect(tolower(precip_col), "mm")) {
+      med_p <- suppressWarnings(stats::median(precip_val[precip_val > 0], na.rm = TRUE))
+      if (is.finite(med_p) && med_p > 0 && med_p < 1) precip_val <- precip_val * 1000
+    }
+  }
+
+  tibble(
+    DateTime = raw$DateTime,
+    Date = as.Date(raw$DateTime),
+    Tair_biomet = tair_val,
+    RH_biomet = rh_val,
+    VPD_biomet = vpd_val,
+    PPFD_biomet = ppfd_val,
+    Tsoil_biomet = tsoil_val,
+    SWC_biomet = swc_val,
+    Precipitation_biomet = precip_val
+  )
+}
+
+load_eddypro_may23 <- function(path, year = NA_integer_) {
+  if (!file.exists(path)) return(NULL)
+  raw <- readr::read_csv(path, skip = 1, show_col_types = FALSE)
+  names(raw) <- trimws(names(raw))
+
+  date_col <- pick_col(names(raw), c("date"))
+  time_col <- pick_col(names(raw), c("time"))
+  if (is.na(date_col) || is.na(time_col)) return(NULL)
+
+  raw <- raw %>%
+    filter(!str_detect(as.character(.data[[date_col]]), "\\[yyyy"))
+
+  dt <- parse_dt_guess(paste(raw[[date_col]], raw[[time_col]]))
+  if (!is.na(year)) dt <- force_year(dt, year)
+
+  tair_col <- pick_col(names(raw), c("air_temperature"))
+  rh_col <- pick_col(names(raw), c("rh"))
+  vpd_col <- pick_col(names(raw), c("vpd"))
+
+  tair_val <- if (!is.na(tair_col)) to_num(raw[[tair_col]]) else NA_real_
+  rh_val <- if (!is.na(rh_col)) to_num(raw[[rh_col]]) else NA_real_
+  vpd_val <- if (!is.na(vpd_col)) to_num(raw[[vpd_col]]) else NA_real_
+  vpd_med <- suppressWarnings(stats::median(vpd_val, na.rm = TRUE))
+  if (is.finite(vpd_med) && vpd_med > 20) vpd_val <- vpd_val / 1000
+
+  tibble(
+    DateTime = dt,
+    Date = as.Date(dt),
+    Tair_biomet = tair_val,
+    RH_biomet = rh_val,
+    VPD_biomet = vpd_val,
+    PPFD_biomet = NA_real_,
+    Tsoil_biomet = NA_real_,
+    SWC_biomet = NA_real_,
+    Precipitation_biomet = NA_real_
+  ) %>%
+    filter(!is.na(DateTime))
+}
+
+load_precip_2023 <- function(path) {
+  if (!file.exists(path)) return(NULL)
+
+  # 1. ОПРЕДЕЛЯЕМ РАЗДЕЛИТЕЛЬ
+  # Читаем первую строку с правильной кодировкой
+  header_line <- readr::read_lines(path, n_max = 1, locale = locale(encoding = "UTF-8"))
+  dl <- if (str_detect(header_line, ";")) ";" else if (str_detect(header_line, "\t")) "\t" else ","
+  
+  # 2. ЧИТАЕМ ДАННЫЕ (UTF-8, skip=0)
+  raw <- readr::read_delim(
+    path, 
+    delim = dl, 
+    skip = 0,                            # Заголовки на 1-й строке
+    locale = locale(encoding = "UTF-8"), # Явно указываем UTF-8
+    show_col_types = FALSE
+  )
+  
+  # Теперь names(raw) корректный UTF-8, и trimws не упадет
+  names(raw) <- trimws(names(raw))
+  
+  # Если имя первой колонки считалось с ошибкой (BOM или что-то еще), переименуем
+  if (!"Число" %in% names(raw) && !"Day" %in% names(raw)) {
+     names(raw)[1] <- "Day"
+  } else if ("Число" %in% names(raw)) {
+     raw <- raw %>% rename(Day = Число)
+  }
+
+  if (ncol(raw) < 2) return(NULL)
+
+  month_map <- c("Apr" = 4, "May" = 5, "June" = 6, "July" = 7, "Aug" = 8, "Sempt" = 9)
+
+  raw_long <- raw %>%
+    # Очистка Дня (на случай пробелов или формата)
+    mutate(Day = as.numeric(str_replace(as.character(Day), ",", "."))) %>% 
+    filter(!is.na(Day)) %>%
+    pivot_longer(-Day, names_to = "Month", values_to = "Precip") %>%
+    mutate(
+      Month = trimws(Month), # Убираем пробелы из названий месяцев
+      MonthNum = month_map[Month],
+      
+      # Очистка осадков: запятая -> точка, "-" -> NA
+      Precip = str_replace(Precip, ",", "."),
+      Precip = as.numeric(na_if(Precip, "-")),
+      
+      # БЕЗОПАСНАЯ ДАТА: make_date вернет NA для 31 июня, вместо ошибки
+      Date = make_date(year = 2023, month = MonthNum, day = Day)
+    ) %>%
+    # Удаляем строки, где дата не сложилась (например, 31 апреля)
+    filter(!is.na(Date))
+
+  # Агрегация
+  raw_long %>%
+    group_by(Date) %>%
+    summarise(Precipitation_sum = sum(Precip, na.rm = TRUE), .groups = "drop") %>%
+    arrange(Date)
+}
+
+load_precip_2016 <- function(path) {
+  if (!file.exists(path)) return(NULL)
+  first_line <- readr::read_lines(path, n_max = 1)
+  delim <- ifelse(str_detect(first_line, ";"), ";", ",")
+  raw <- readr::read_delim(
+    path,
+    delim = delim,
+    show_col_types = FALSE,
+    col_types = readr::cols(.default = readr::col_character())
+  )
+  names(raw) <- trimws(names(raw))
+
+  dt_col <- pick_col(names(raw), c("DateTime", "Date", "DATE", "datetime", "timestamp"))
+  pr_col <- pick_col(names(raw), c("RRR", "precip", "precipitation", "rain"))
+  if (is.na(dt_col) || is.na(pr_col)) return(NULL)
+
+  out <- raw %>%
+    transmute(
+      DateTime = parse_dt_guess(.data[[dt_col]]),
+      Precip = to_num(.data[[pr_col]])
+    ) %>%
+    filter(!is.na(DateTime)) %>%
+    mutate(Precip = ifelse(is.na(Precip), 0, Precip))
+
+  if (nrow(out) > 0) {
+    pr_max <- suppressWarnings(max(out$Precip, na.rm = TRUE))
+    pr_nz <- sum(out$Precip > 0, na.rm = TRUE)
+    cat(sprintf("  precip_2016: n=%d, nonzero=%d, max=%.1f\n", nrow(out), pr_nz, pr_max))
+  }
+
+  out
+}
+
+merge_biomet_sources <- function(main, extra) {
+  if (is.null(main)) return(extra)
+  if (is.null(extra)) return(main)
+  full_join(main, extra, by = "DateTime", suffix = c("_main", "_extra")) %>%
+    mutate(
+      Date = coalesce(Date_main, Date_extra),
+      Tair_biomet = coalesce(Tair_biomet_main, Tair_biomet_extra),
+      RH_biomet = coalesce(RH_biomet_main, RH_biomet_extra),
+      VPD_biomet = coalesce(VPD_biomet_main, VPD_biomet_extra),
+      PPFD_biomet = coalesce(PPFD_biomet_main, PPFD_biomet_extra),
+      Tsoil_biomet = coalesce(Tsoil_biomet_main, Tsoil_biomet_extra),
+      SWC_biomet = coalesce(SWC_biomet_main, SWC_biomet_extra),
+      Precipitation_biomet = coalesce(Precipitation_biomet_main, Precipitation_biomet_extra)
+    ) %>%
+    select(DateTime, Date, Tair_biomet, RH_biomet, VPD_biomet, PPFD_biomet,
+           Tsoil_biomet, SWC_biomet, Precipitation_biomet)
+}
+
+create_meteo_plots <- function(biomet_year, year, bounds, precip_ts = NULL,
+                               roll_window_days = 7, ppfd_thresh = 10) {
+  if (is.null(biomet_year) || nrow(biomet_year) == 0) {
+    cat(sprintf("  !! No biomet data for %d\n", year))
+    return()
+  }
+
+  if (!"DateTime" %in% names(biomet_year)) {
+    if ("Date" %in% names(biomet_year)) {
+      biomet_year <- biomet_year %>% mutate(DateTime = as.POSIXct(Date))
+    } else {
+      cat(sprintf("  !! DateTime missing for %d\n", year))
+      return()
+    }
+  }
+
+  season_start <- as.POSIXct(as.Date(bounds$Sowing), tz = "UTC")
+  season_end <- as.POSIXct(as.Date(bounds$Harvesting) + 1, tz = "UTC")
+
+  biomet_season <- biomet_year %>%
+    mutate(DateTime = as.POSIXct(DateTime, tz = "UTC"),
+           Date = as.Date(DateTime)) %>%
+    filter(DateTime >= season_start & DateTime <= season_end) %>%
+    arrange(DateTime) %>%
+    mutate(
+      PPFD_day = ifelse(is.finite(PPFD_biomet) & PPFD_biomet > ppfd_thresh, PPFD_biomet, NA_real_),
+      Tair_roll = roll_mean_index(Tair_biomet, DateTime, roll_window_days),
+      RH_roll = roll_mean_index(RH_biomet, DateTime, roll_window_days),
+      VPD_roll = roll_mean_index(VPD_biomet, DateTime, roll_window_days),
+      PPFD_roll = roll_mean_index(PPFD_day, DateTime, roll_window_days),
+      Tsoil_roll = roll_mean_index(Tsoil_biomet, DateTime, roll_window_days),
+      SWC_roll = roll_mean_index(SWC_biomet, DateTime, roll_window_days)
+    )
+
+  if (nrow(biomet_season) == 0) {
+    cat(sprintf("  !! No seasonal biomet data for %d\n", year))
+    return()
+  }
+
+  precip_plot <- NULL
+  if (!is.null(precip_ts) && nrow(precip_ts) > 0) {
+    pcols <- names(precip_ts)
+    dt_raw <- if ("DateTime" %in% pcols) precip_ts$DateTime else if ("Date" %in% pcols) precip_ts$Date else NA
+    pr_col <- pick_col(pcols, c("Precipitation_sum", "Precipitation", "Precip", "P_mm", "RRR"))
+    if (!all(is.na(dt_raw)) && !is.na(pr_col)) {
+      precip_plot <- tibble(
+        DateTime = parse_dt_guess(dt_raw),
+        Precip = to_num(precip_ts[[pr_col]])
+      )
+    }
+  }
+  if (is.null(precip_plot) || nrow(precip_plot) == 0) {
+    precip_plot <- biomet_season %>%
+      transmute(DateTime, Precip = Precipitation_biomet)
+  }
+  precip_plot <- precip_plot %>%
+    filter(!is.na(DateTime), is.finite(Precip)) %>%
+    arrange(DateTime) %>%
+    filter(DateTime >= season_start & DateTime <= season_end)
+
+  precip_daily <- precip_plot %>%
+    mutate(Date = as.Date(DateTime)) %>%
+    group_by(Date) %>%
+    summarise(Precip_day = sum_or_na(Precip), .groups = "drop") %>%
+    mutate(DateTime = as.POSIXct(Date, tz = "UTC")) %>%
+    filter(DateTime >= season_start & DateTime <= season_end)
+
+  make_meteo_dynamics <- function(lang) {
+    labels_meteo <- list(
+      ru = list(
+        title = sprintf("Динамика метеоусловий за вегетационный сезон %d", year),
+        subtitle = "Вертикальные линии — начало фенофаз",
+        tair = "Температура воздуха (°C)",
+        rh = "Относительная влажность (%)",
+        vpd = "VPD (кПа)",
+        ppfd = "PPFD (мкмоль м⁻² с⁻¹)",
+        tsoil = "Температура почвы (°C)",
+        swc = "Влажность почвы (%)",
+        precipitation = "Осадки (мм)",
+        days_label = "Дни от посева"
+      ),
+      en = list(
+        title = sprintf("Meteorological conditions dynamics during growing season %d", year),
+        subtitle = "Vertical lines indicate phenophase onset",
+        tair = "Air temperature (°C)",
+        rh = "Relative humidity (%)",
+        vpd = "VPD (kPa)",
+        ppfd = "PPFD (µmol m⁻² s⁻¹)",
+        tsoil = "Soil temperature (°C)",
+        swc = "Soil water content (%)",
+        precipitation = "Precipitation (mm)",
+        days_label = "Days from sowing"
+      )
+    )
+    L <- labels_meteo[[lang]]
+    x_label <- get_label("date", lang)
+    time_scale <- scale_x_datetime(
+      date_breaks = "2 weeks",
+      date_labels = "%d.%m",
+      limits = c(season_start, season_end)
+    )
+    theme_meteo <- theme_bw(base_size = 11) +
+      theme(panel.grid.minor = element_blank())
+
+    plots_list <- list()
+    have_precip <- !is.null(precip_daily) && nrow(precip_daily) > 0 &&
+      any(is.finite(precip_daily$Precip_day))
+    have_rh <- sum(is.finite(biomet_season$RH_biomet)) > 10
+
+    if (sum(is.finite(biomet_season$Tair_biomet)) > 10) {
+      plots_list$Tair <- ggplot(biomet_season %>% filter(is.finite(Tair_biomet)),
+                                aes(x = DateTime)) +
+        geom_point(aes(y = Tair_biomet), color = "grey50", size = 0.35, alpha = 0.35) +
+        geom_line(aes(y = Tair_roll), color = "#d62728", linewidth = 0.8, na.rm = TRUE) +
+        labs(title = if (length(plots_list) == 0) L$title else NULL,
+             x = "", y = L$tair) +
+        time_scale +
+        theme_meteo
+    }
+
+    if (have_rh && !have_precip) {
+      plots_list$RH <- ggplot(biomet_season %>% filter(is.finite(RH_biomet)),
+                              aes(x = DateTime)) +
+        geom_point(aes(y = RH_biomet), color = "grey50", size = 0.35, alpha = 0.35) +
+        geom_line(aes(y = RH_roll), color = "#2ca02c", linewidth = 0.8, na.rm = TRUE) +
+        labs(x = "", y = L$rh) +
+        time_scale +
+        theme_meteo
+    }
+
+    if (sum(is.finite(biomet_season$VPD_biomet)) > 10) {
+      plots_list$VPD <- ggplot(biomet_season %>% filter(is.finite(VPD_biomet)),
+                               aes(x = DateTime)) +
+        geom_point(aes(y = VPD_biomet), color = "grey50", size = 0.35, alpha = 0.35) +
+        geom_line(aes(y = VPD_roll), color = "#ff7f0e", linewidth = 0.8, na.rm = TRUE) +
+        labs(x = "", y = L$vpd) +
+        time_scale +
+        theme_meteo
+    }
+
+    if (sum(is.finite(biomet_season$PPFD_day)) > 10) {
+      plots_list$PPFD <- ggplot(biomet_season %>% filter(is.finite(PPFD_day)),
+                                aes(x = DateTime)) +
+        geom_point(aes(y = PPFD_day), color = "grey50", size = 0.35, alpha = 0.35) +
+        geom_line(aes(y = PPFD_roll), color = "#9467bd", linewidth = 0.8, na.rm = TRUE) +
+        labs(x = "", y = L$ppfd) +
+        time_scale +
+        theme_meteo
+    }
+
+    if (sum(is.finite(biomet_season$Tsoil_biomet)) > 10) {
+      plots_list$Tsoil <- ggplot(biomet_season %>% filter(is.finite(Tsoil_biomet)),
+                                 aes(x = DateTime)) +
+        geom_point(aes(y = Tsoil_biomet), color = "grey50", size = 0.35, alpha = 0.35) +
+        geom_line(aes(y = Tsoil_roll), color = "#8c564b", linewidth = 0.8, na.rm = TRUE) +
+        labs(x = "", y = L$tsoil) +
+        time_scale +
+        theme_meteo
+    }
+
+    if (sum(is.finite(biomet_season$SWC_biomet)) > 10) {
+      plots_list$SWC <- ggplot(biomet_season %>% filter(is.finite(SWC_biomet)),
+                               aes(x = DateTime)) +
+        geom_point(aes(y = SWC_biomet), color = "grey50", size = 0.35, alpha = 0.35) +
+        geom_line(aes(y = SWC_roll), color = "#17becf", linewidth = 0.8, na.rm = TRUE) +
+        labs(x = x_label, y = L$swc) +
+        time_scale +
+        theme_meteo
+    }
+
+    if (have_precip && have_rh) {
+      rh_max <- suppressWarnings(max(biomet_season$RH_biomet, na.rm = TRUE))
+      precip_max <- suppressWarnings(max(precip_daily$Precip_day, na.rm = TRUE))
+      rh_sf <- if (is.finite(rh_max) && rh_max > 0 && is.finite(precip_max) && precip_max > 0) {
+        precip_max / rh_max
+      } else {
+        1
+      }
+
+      plots_list$RH_Precip <- ggplot() +
+        geom_col(data = precip_daily, aes(x = DateTime, y = Precip_day),
+                 fill = "#1f77b4", color = "#1f77b4", alpha = 0.6,
+                 width = 24 * 60 * 60 * 0.9) +
+        geom_point(data = biomet_season %>% filter(is.finite(RH_biomet)),
+                   aes(x = DateTime, y = RH_biomet * rh_sf),
+                   color = "grey40", size = 0.35, alpha = 0.35) +
+        geom_line(data = biomet_season,
+                  aes(x = DateTime, y = RH_roll * rh_sf),
+                  color = "grey40", linewidth = 0.8, na.rm = TRUE) +
+        scale_y_continuous(name = L$precipitation,
+                           sec.axis = sec_axis(~ . / rh_sf, name = L$rh)) +
+        labs(x = x_label) +
+        time_scale +
+        theme_meteo
+    } else if (have_precip) {
+      plots_list$Precipitation <- ggplot(precip_daily, aes(x = DateTime)) +
+        geom_col(aes(y = Precip_day), fill = "#1f77b4", color = "#1f77b4", alpha = 0.6,
+                 width = 24 * 60 * 60 * 0.9) +
+        labs(x = x_label, y = L$precipitation) +
+        time_scale +
+        theme_meteo
+    }
+
+    if (length(plots_list) == 0) {
+      return(ggplot() + labs(title = "No meteo data") + theme_void())
+    }
+
+    if (requireNamespace("patchwork", quietly = TRUE)) {
+      library(patchwork)
+      return(wrap_plots(plots_list, ncol = 2))
+    }
+    if (requireNamespace("gridExtra", quietly = TRUE)) {
+      library(gridExtra)
+      return(gridExtra::grid.arrange(grobs = plots_list, ncol = 2))
+    }
+    plots_list[[1]]
+  }
+
+  tryCatch({
+    save_bilingual(make_meteo_dynamics, sprintf("Meteo_dynamics_%d", year),
+                   width = 14, height = 10, dpi = 300)
+    cat(sprintf("  -> Meteo_dynamics_%d_ru.png / _en.png\n", year))
+  }, error = function(e) {
+    cat(sprintf("  !! Meteo plots failed for %d: %s\n", year, e$message))
+  })
+}
+
+base_dir <- "."
+biomet_2013_path <- file.path(base_dir, "biomet2013.csv")
+biomet_2016_path <- file.path(base_dir, "2016BiomB.csv")
+precip_2016_path <- file.path(base_dir, "2016_precip.csv")
+biomet_2023_main_path <- file.path(base_dir, "Anal11_biomet.csv")
+biomet_2023_eddy_path <- file.path(base_dir, "eddypro_may_23.csv")
+precip_2023_path <- file.path(base_dir, "Осадки_2023.csv")
+
+biomet_2013 <- load_biomet_data(biomet_2013_path, year = 2013,
+                                date_col = "DATE_1", time_col = "TIME_1")
+biomet_2016 <- load_biomet_data(biomet_2016_path, year = 2016, date_col = "TIMESTAMP")
+precip_2016_ts <- load_precip_2016(precip_2016_path)
+biomet_2023_main <- load_biomet_data(biomet_2023_main_path, year = 2023, date_col = "DateTime")
+biomet_2023_eddy <- load_eddypro_may23(biomet_2023_eddy_path, year = 2023)
+precip_2023_daily <- load_precip_2023(precip_2023_path)
+biomet_2023 <- merge_biomet_sources(biomet_2023_main, biomet_2023_eddy)
+
+log_biomet_summary <- function(label, df) {
+  if (is.null(df) || nrow(df) == 0) {
+    cat(sprintf("  !! %s: no data\n", label))
+    return()
+  }
+  dmin <- suppressWarnings(min(df$Date, na.rm = TRUE))
+  dmax <- suppressWarnings(max(df$Date, na.rm = TRUE))
+  dt_na <- if ("DateTime" %in% names(df)) sum(is.na(df$DateTime)) else NA_integer_
+  cat(sprintf("  %s: n=%d, Date range=%s..%s, DateTime NA=%s\n",
+              label, nrow(df), dmin, dmax, dt_na))
+}
+
+cat("\n=== BIOMET summary ===\n")
+log_biomet_summary("biomet_2013", biomet_2013)
+log_biomet_summary("biomet_2016", biomet_2016)
+log_biomet_summary("biomet_2023", biomet_2023)
+if (!is.null(precip_2016_ts)) {
+  cat(sprintf("  precip_2016_ts: n=%d, DateTime range=%s..%s\n",
+              nrow(precip_2016_ts),
+              min(precip_2016_ts$DateTime, na.rm = TRUE),
+              max(precip_2016_ts$DateTime, na.rm = TRUE)))
+} else {
+  cat("  !! 2016_precip: no data\n")
+}
+if (!is.null(precip_2023_daily)) {
+  cat(sprintf("  precip_2023_daily: n=%d, Date range=%s..%s\n",
+              nrow(precip_2023_daily),
+              min(precip_2023_daily$Date, na.rm = TRUE),
+              max(precip_2023_daily$Date, na.rm = TRUE)))
+} else {
+  cat("  !! precip_2023_daily: no data\n")
+}
+
+if (!is.null(biomet_2013)) create_meteo_plots(biomet_2013, 2013, B2013)
+if (!is.null(biomet_2016)) create_meteo_plots(biomet_2016, 2016, B2016)
+if (!is.null(biomet_2023)) create_meteo_plots(biomet_2023, 2023, B2023,
+                                               precip_ts = precip_2023_daily)
+
+# ----------------------- Загрузка 2013/2016 и сборка -----------------------
+f2013 <- "Lasslop_2013_Complete_GapFilled.csv"
+f2016 <- "Moscow_2016_verFin_newVersion.csv"
+stopifnot(file.exists(f2013), file.exists(f2016))
+raw13 <- readr::read_csv(f2013, show_col_types = FALSE, guess_max = 1e6) |> clean_names()
+raw16 <- readr::read_csv(f2016, show_col_types = FALSE, guess_max = 1e6) |> clean_names()
+
+df13 <- build_year_df(raw13, 2013, B2013, tz_in="UTC", shift_hours=0L)
+df16 <- build_year_df(raw16, 2016, B2016, tz_in="UTC", shift_hours=0L)
+
+# Диагностика (можно закомментировать):
+cat("\nДиагностика фаз 2013/2016:\n")
+print(bind_rows(df13, df16) %>% count(Year, Phase_lab))
+
+# ----------------------- Объединение и сглаживание -----------------------
+df_all <- bind_rows(df13, df16, df23) %>%
+  filter(!is.na(datetime), !is.na(HourInt), !is.na(Phase_lab))
+
+# шаг 1: среднее по ДНЯМ в каждом ЧАСЕ
+by_day <- df_all %>%
+  group_by(Year, Phase_lab, Date, HourInt) %>%
+  summarise(
+    NEE  = mean(NEE,  na.rm = TRUE),
+    GPP  = mean(GPP,  na.rm = TRUE),
+    Reco = mean(Reco, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# шаг 2: среднее по дням фазы + SE + 95% CI
+diu <- by_day %>%
+  group_by(Year, Phase_lab, HourInt) %>%
+  summarise(
+    across(c(NEE,GPP,Reco),
+           list(mean = ~mean(.x, na.rm=TRUE),
+                se   = ~sd(.x, na.rm=TRUE)/sqrt(sum(is.finite(.x)))),
+           .names="{.col}_{.fn}"),
+    .groups="drop"
+  ) %>%
+  mutate(across(ends_with("_se"), ~replace_na(.x, 0)),
+         NEE_lwr  = NEE_mean  - 1.96*NEE_se,  NEE_upr  = NEE_mean  + 1.96*NEE_se,
+         GPP_lwr  = GPP_mean  - 1.96*GPP_se,  GPP_upr  = GPP_mean  + 1.96*GPP_se,
+         Reco_lwr = Reco_mean - 1.96*Reco_se, Reco_upr = Reco_mean + 1.96*Reco_se)
+
+# ----------------------- Графики -----------------------
+pal_year <- c(`2013`="#1b9e77", `2016`="#d95f02", `2023`="#7570b3")
+theme_base <- theme_bw(base_size = 12) +
+  theme(panel.grid.minor=element_blank(),
+        panel.grid.major=element_line(linewidth=0.2, colour="grey85"),
+        strip.background=element_rect(fill="grey95", colour="grey80"),
+        plot.title=element_text(face="bold", hjust=0.02),
+        legend.position="bottom")
+
+plot_flux <- function(flux){
+  cols <- paste0(flux, c("_mean","_lwr","_upr"))
+  p <- ggplot(diu, aes(x = HourInt, y = .data[[cols[1]]],
+                    color = factor(Year), fill = factor(Year))) +
+      geom_ribbon(aes(ymin = .data[[cols[2]]], ymax = .data[[cols[3]]]),
+                  alpha = 0.14, colour = NA) +
+      geom_line(linewidth = 1) +
+      geom_point(size = 1.1) +
+      facet_wrap(~Phase_lab, ncol = 3, drop = FALSE) +
+      scale_color_manual(values = pal_year, name = "Год") +
+      scale_fill_manual(values = pal_year, guide = "none") +
+      scale_x_continuous(breaks = seq(0,23,6), limits = c(0,23), expand = c(0,0)) +
+      labs(title = paste("Среднесуточные значения", flux),
+           x = "Часы суток", y = "мкмоль CO₂ м⁻² с⁻¹") +
+      theme_base
+  return(p)
+}
+
+p_NEE  <- plot_flux("NEE")
+p_GPP  <- plot_flux("GPP")
+p_Reco <- plot_flux("Reco")
+
+print(p_NEE); print(p_GPP); print(p_Reco)
+
+# ----------------------- Сохранение результатов -----------------------
+readr::write_csv(diu, "diurnal_summary_2013_2016_2023.csv")
+ggsave("compare_diurnal_NEE_2013_2016_2023.png",  p_NEE,  width=12, height=8, dpi=800, bg="white")
+ggsave("compare_diurnal_GPP_2013_2016_2023.png",  p_GPP,  width=12, height=8, dpi=800, bg="white")
+ggsave("compare_diurnal_Reco_2013_2016_2023.png", p_Reco, width=12, height=8, dpi=800, bg="white")
+
+cat("\nГотово. Файлы сохранены:\n  - diurnal_summary_2013_2016_2023.csv\n  - compare_diurnal_*.png\n")
+
+
+# ================================================================
+# Сравнение световых кривых (2013, 2016, 2023) с формулой:
+#   GPP_pred = (α_phase * β_phase * bigleaf::PPFD.to.Rg(PPFD_f)) /
+#              (α_phase * bigleaf::PPFD.to.Rg(PPFD_f) + β_phase)
+# ---------------------------------------------------------------
+# Требуется: готовые df13, df16, df23 с колонками datetime, Phase_lab,
+#            GPP (или аналоги) и PPFD_f/PPFD (или аналоги).
+# Выход: три графика и таблица коэффициентов α, β по годам и фазам.
+# ================================================================
+
+# ---------- стандартизация по году: берём РОВНО одну PPFD и одну GPP ----------
+prep_year_ppfd_rg <- function(df, year){
+  stopifnot(all(c("datetime","Phase_lab") %in% names(df)))
+  gpp_col  <- first_or_stop(df,
+                            c("GPP","gpp","gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u_star_f"),
+                            "колонку GPP")
+  ppfd_col <- first_or_stop(df,
+                            c("PPFD_f","ppfd_f","PPFD","ppfd","ppfd_mean","PPFD_mean","ppfd_orig","PPFD_orig"),
+                            "колонку PPFD/PPFD_f")
+
+  out <- df %>%
+    transmute(
+      Year      = as.integer(year),
+      datetime  = as.POSIXct(datetime, tz = "UTC"),
+      Phase_lab = factor(Phase_lab, levels = PHASE6_RU),
+      PPFD      = safe_num(.data[[ppfd_col]]),
+      Rg        = bigleaf::PPFD.to.Rg(PPFD),      # перевод в радиацию (W m-2)
+      GPP       = safe_num(.data[[gpp_col]])
+    ) %>%
+    # фильтры только для дальнейшего анализа (исходники НЕ трогаем)
+    filter(!is.na(Phase_lab),
+           is.finite(PPFD), PPFD >= 10, PPFD <= 2200,
+           is.finite(Rg),   Rg   >= 5,  Rg   <= 1200,
+           is.finite(GPP),  GPP  >= 0,  GPP  <= 40)
+  out
+}
+
+# ---------- устойчивый фит α, β в терминах Rg ----------
+# модель: GPP = (α * β * Rg) / (α * Rg + β)
+fit_lrc_rg <- function(dat){
+  dat <- arrange(dat, Rg)
+  if (nrow(dat) < 12 || diff(range(dat$Rg)) < 50 || var(dat$GPP) < 0.05) {
+    return(tibble(alpha = NA_real_, beta = NA_real_))
+  }
+  # биннинг для устойчивости
+  bin_w <- 50
+  db <- dat %>%
+    mutate(Rg_bin = pmax(0, floor(Rg/bin_w)*bin_w)) %>%
+    group_by(Rg_bin) %>%
+    summarise(Rg = mean(Rg), GPP = mean(GPP), .groups="drop") %>%
+    arrange(Rg)
+
+  # стартовые оценки
+  low <- db %>% filter(Rg <= quantile(Rg, 0.2, na.rm=TRUE))
+  a0  <- suppressWarnings(coef(lm(GPP ~ 0 + Rg, data = low)))[1]; if (!is.finite(a0)) a0 <- 0.03
+  a0  <- min(max(a0, 0.005), 0.12)
+  b0  <- quantile(db$GPP, 0.95, na.rm=TRUE); if (!is.finite(b0) || b0 <= 0) b0 <- max(db$GPP, na.rm=TRUE)
+  b0  <- min(max(b0, 5), 40)
+
+  fit <- try(
+    nls(GPP ~ (alpha*beta*Rg)/(alpha*Rg + beta),
+        data = db,
+        start = list(alpha = a0, beta = b0),
+        algorithm = "port",
+        lower = c(alpha = 1e-4, beta = 1),
+        upper = c(alpha = 0.2,  beta = 60),
+        control = nls.control(maxiter = 500, warnOnly = TRUE)),
+    silent = TRUE
+  )
+
+  if (!inherits(fit, "try-error")) {
+    co <- coef(fit)
+    return(tibble(alpha = unname(co["alpha"]), beta = unname(co["beta"])))
+  }
+
+  # резервный грид-поиск
+  grid_a <- c(0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12, 0.2)
+  grid_b <- c(   5,    8,   10,   15,   20,   30,   40,  60)
+  best <- list(a = NA_real_, b = NA_real_, rss = Inf)
+  for (aa in grid_a){
+    for (bb in grid_b){
+      pred <- (aa*bb*db$Rg)/(aa*db$Rg + bb)
+      rss  <- sum((db$GPP - pred)^2)
+      if (is.finite(rss) && rss < best$rss) best <- list(a=aa, b=bb, rss=rss)
+    }
+  }
+  tibble(alpha = best$a, beta = best$b)
+}
+
+# ---------- подготовка всех лет ----------
+stopifnot(exists("df13"), exists("df16"), exists("df23"))
+df13$Phase_lab <- factor(df13$Phase_lab, levels = PHASE6_RU)
+df16$Phase_lab <- factor(df16$Phase_lab, levels = PHASE6_RU)
+df23$Phase_lab <- factor(df23$Phase_lab, levels = PHASE6_RU)
+
+d13 <- prep_year_ppfd_rg(df13, 2013)
+d16 <- prep_year_ppfd_rg(df16, 2016)
+d23 <- prep_year_ppfd_rg(df23, 2023)
+
+light_all <- bind_rows(d13, d16, d23)
+
+# ---------- коэффициенты α, β по (год × фаза) ----------
+coef_tbl <- light_all %>%
+  group_by(Year, Phase_lab) %>%
+  group_modify(~fit_lrc_rg(.x)) %>%
+  ungroup() %>%
+  mutate(GPPmax = beta)
+
+# ---------- кривые: строим по PPFD-сетке, как просили (через Rg из PPFD) ----------
+# xmax_PPFD — индивидуально для каждой пары «год × фаза»
+range_tbl <- light_all %>%
+  group_by(Year, Phase_lab) %>%
+  summarise(PPFD_max = min(2000, max(PPFD, na.rm=TRUE)), .groups = "drop") %>%
+  mutate(PPFD_max = ifelse(!is.finite(PPFD_max) | PPFD_max <= 0, 500, PPFD_max))
+
+curve_tbl <- coef_tbl %>%
+  left_join(range_tbl, by = c("Year","Phase_lab")) %>%
+  filter(is.finite(alpha), is.finite(beta)) %>%
+  rowwise() %>%
+  mutate(
+    data = list({
+      xs_ppfd <- seq(0, PPFD_max, length.out = 200)
+      xs_rg   <- bigleaf::PPFD.to.Rg(xs_ppfd)
+      tibble(PPFD = xs_ppfd,
+             GPP_hat = (alpha*beta*xs_rg)/(alpha*xs_rg + beta))
+    })
+  ) %>%
+  ungroup() %>%
+  tidyr::unnest(data) %>%
+  select(Year, Phase_lab, PPFD, GPP_hat)
+
+# ---------- биннинг для «усиков» (по PPFD) ----------
+bin_w <- 100
+bins_tbl <- light_all %>%
+  mutate(PPFD_bin = pmax(0, floor(PPFD/bin_w)*bin_w)) %>%
+  group_by(Year, Phase_lab, PPFD_bin) %>%
+  summarise(GPP_mean = mean(GPP), GPP_se = sd(GPP)/sqrt(dplyr::n()), .groups="drop") %>%
+  mutate(GPP_se = replace_na(GPP_se, 0))
+
+# ---------- аннотации α, GPPmax (= β) ----------
+# 0) Общая шкала Y
+y_max_fixed <- suppressWarnings(max(c(light_all$GPP, curve_tbl$GPP_hat), na.rm = TRUE))
+if (!is.finite(y_max_fixed) || y_max_fixed <= 0) y_max_fixed <- 10
+y_breaks <- pretty(c(0, y_max_fixed), n = 6)
+y_max_fixed <- max(y_breaks)
+
+# 1) Фиксируем позиции подписей: слева сверху в каждом фасете
+year_levels <- c(2013, 2016, 2023)             # порядок строк-подписей
+top_pad     <- y_max_fixed * 0.04              # отступ сверху
+y_step      <- max(y_max_fixed * 0.08, 1.0)    # шаг между годами (минимум 1)
+x_pad       <- 30                              # отступ слева по PPFD
+
+anno_fixed <- coef_tbl %>%
+  mutate(Year = factor(Year, levels = year_levels)) %>%
+  group_by(Phase_lab) %>%
+  arrange(Year) %>%
+  mutate(
+    x     = x_pad,
+    y     = y_max_fixed - top_pad - (row_number()-1) * y_step,
+    label = paste0("α = ", fmt_num(alpha), "  β = ", fmt_num(beta))
+  ) %>%
+  ungroup()
+
+# 3) Графики с едиными осями Y и фиксированными подписями
+p_whisk <- ggplot() +
+  geom_point(data = light_all, aes(PPFD, GPP, color = factor(Year)), alpha=0.25, size=1) +
+  geom_errorbar(data = bins_tbl,
+                aes(x = PPFD_bin + (as.numeric(factor(Year))-2)*100/6,
+                    ymin = GPP_mean-1.96*GPP_se, ymax = GPP_mean+1.96*GPP_se,
+                    color=factor(Year)), width = 100/4, alpha=0.6) +
+  geom_point(data = bins_tbl,
+             aes(x = PPFD_bin + (as.numeric(factor(Year))-2)*100/6,
+                 y = GPP_mean, color=factor(Year)), size=1.6, alpha=0.8) +
+  geom_line(data = curve_tbl, aes(PPFD, GPP_hat, color=factor(Year)), linewidth=1.1) +
+  geom_text(data = anno_fixed, aes(x=x, y=y, label=label, color=factor(Year)),
+            hjust=0, vjust=1, size=3.5, fontface="bold") +
+  facet_wrap(~Phase_lab, ncol=3, scales="fixed") +
+  scale_color_manual(values=pal_year, name="Год") +
+  scale_y_continuous(limits = c(0, y_max_fixed), breaks = y_breaks, expand = expansion(mult = c(0, 0.02))) +
+  labs(title="",
+       x="PPFD (мкмоль фотонов м⁻² с⁻¹)", y="Общая первичная продуктивность (мкмоль CO₂ м⁻² с⁻¹)") +
+  theme_base
+
+p_lines_pts <- ggplot() +
+  geom_point(data = light_all, aes(PPFD, GPP, color=factor(Year)), alpha=0.25, size=1) +
+  geom_line (data = curve_tbl, aes(PPFD, GPP_hat, color=factor(Year)), linewidth=1.1) +
+  geom_text(data = anno_fixed, aes(x=x, y=y, label=label, color=factor(Year)),
+            hjust=0, vjust=1, size=3.5, fontface="bold") +
+  facet_wrap(~Phase_lab, ncol=3, scales="fixed") +
+  scale_color_manual(values=pal_year, name="Год") +
+  scale_y_continuous(limits = c(0, y_max_fixed), breaks = y_breaks, expand = expansion(mult = c(0, 0.02))) +
+  labs(title="Световые кривые по фенофазам",
+       x="PPFD (мкмоль фотонов м⁻² с⁻¹)", y="Общая первичная продуктивность (мкмоль CO₂ м⁻² с⁻¹)") +
+  theme_base
+
+p_lines_only <- ggplot() +
+  geom_line(data = curve_tbl, aes(PPFD, GPP_hat, color=factor(Year)), linewidth=1.2) +
+  geom_text(data = anno_fixed, aes(x=x, y=y, label=label, color=factor(Year)),
+            hjust=0, vjust=1, size=3.7, fontface="bold") +
+  facet_wrap(~Phase_lab, ncol=3, scales="fixed") +
+  scale_color_manual(values=pal_year, name="Год") +
+  scale_y_continuous(limits = c(0, y_max_fixed), breaks = y_breaks, expand = expansion(mult = c(0, 0.02))) +
+  labs(title="Световые кривые по фенофазам",
+       x="PPFD (мкмоль фотонов м⁻² с⁻¹)", y="Общая первичная продуктивность (мкмоль CO₂ м⁻² с⁻¹)") +
+  theme_base
+
+print(p_whisk); print(p_lines_pts); print(p_lines_only)
+# При необходимости сохранить:
+ggsave("lightRG_whiskers_fixedY.png",     p_whisk,      width=12, height=8, dpi=800, bg="white")
+# ggsave("lightRG_lines_points_fixedY.png", p_lines_pts,  width=12, height=8, dpi=300, bg="white")
+# ggsave("lightRG_lines_only_fixedY.png",   p_lines_only, width=12, height=8, dpi=300, bg="white")
+
+readr::write_csv(coef_tbl %>% arrange(Phase_lab, Year),
+                 "lightRG_coefficients_by_year_phase.csv")
+
+# ==============================================================================
+# ПОДРОБНЫЙ РАСЧЕТ КОЭФФИЦИЕНТОВ α И GPPmax (= β) ДЛЯ СВЕТОВЫХ КРИВЫХ
+# ==============================================================================
+
+cat("\n========================================\n")
+cat("РАСЧЕТ КОЭФФИЦИЕНТОВ α И GPPmax (= beta) ДЛЯ СВЕТОВЫХ КРИВЫХ\n")
+cat("========================================\n\n")
+
+# Функция для расчета коэффициентов с дополнительной статистикой и доверительными интервалами
+fit_lrc_rg_with_stats <- function(dat){
+  dat <- arrange(dat, Rg)
+  n_points <- nrow(dat)
+  r2 <- NA_real_
+  rmse <- NA_real_
+  
+  # Инициализация доверительных интервалов
+  alpha_ci5_lower <- NA_real_
+  alpha_ci5_upper <- NA_real_
+  alpha_ci1_lower <- NA_real_
+  alpha_ci1_upper <- NA_real_
+  beta_ci5_lower <- NA_real_
+  beta_ci5_upper <- NA_real_
+  beta_ci1_lower <- NA_real_
+  beta_ci1_upper <- NA_real_
+  
+  if (nrow(dat) < 12 || diff(range(dat$Rg)) < 50 || var(dat$GPP) < 0.05) {
+    return(tibble(alpha = NA_real_, beta = NA_real_, n_points = n_points, 
+                  r2 = NA_real_, rmse = NA_real_, status = "Insufficient data",
+                  alpha_ci5_lower = alpha_ci5_lower, alpha_ci5_upper = alpha_ci5_upper,
+                  alpha_ci1_lower = alpha_ci1_lower, alpha_ci1_upper = alpha_ci1_upper,
+                  beta_ci5_lower = beta_ci5_lower, beta_ci5_upper = beta_ci5_upper,
+                  beta_ci1_lower = beta_ci1_lower, beta_ci1_upper = beta_ci1_upper))
+  }
+  
+  # биннинг для устойчивости
+  bin_w <- 50
+  db <- dat %>%
+    mutate(Rg_bin = pmax(0, floor(Rg/bin_w)*bin_w)) %>%
+    group_by(Rg_bin) %>%
+    summarise(Rg = mean(Rg), GPP = mean(GPP), .groups="drop") %>%
+    arrange(Rg)
+  
+  # стартовые оценки
+  low <- db %>% filter(Rg <= quantile(Rg, 0.2, na.rm=TRUE))
+  a0  <- suppressWarnings(coef(lm(GPP ~ 0 + Rg, data = low)))[1]; if (!is.finite(a0)) a0 <- 0.03
+  a0  <- min(max(a0, 0.005), 0.12)
+  b0  <- quantile(db$GPP, 0.95, na.rm=TRUE); if (!is.finite(b0) || b0 <= 0) b0 <- max(db$GPP, na.rm=TRUE)
+  b0  <- min(max(b0, 5), 40)
+  
+  fit <- try(
+    nls(GPP ~ (alpha*beta*Rg)/(alpha*Rg + beta),
+        data = db,
+        start = list(alpha = a0, beta = b0),
+        algorithm = "port",
+        lower = c(alpha = 1e-4, beta = 1),
+        upper = c(alpha = 0.2,  beta = 60),
+        control = nls.control(maxiter = 500, warnOnly = TRUE)),
+    silent = TRUE
+  )
+  
+  if (!inherits(fit, "try-error")) {
+    co <- coef(fit)
+    alpha_val <- unname(co["alpha"])
+    beta_val <- unname(co["beta"])
+    
+    # Расчет R² и RMSE
+    pred <- (alpha_val*beta_val*db$Rg)/(alpha_val*db$Rg + beta_val)
+    ss_res <- sum((db$GPP - pred)^2)
+    ss_tot <- sum((db$GPP - mean(db$GPP))^2)
+    r2 <- ifelse(ss_tot > 0, 1 - ss_res/ss_tot, NA_real_)
+    rmse <- sqrt(mean((db$GPP - pred)^2))
+    
+    # Расчет доверительных интервалов (5% и 1%)
+    tryCatch({
+      # 95% доверительный интервал (5% уровень значимости)
+      ci5 <- suppressWarnings(confint(fit, level = 0.95))
+      if (is.matrix(ci5) && nrow(ci5) >= 2) {
+        alpha_ci5_lower <- ci5["alpha", 1]
+        alpha_ci5_upper <- ci5["alpha", 2]
+        beta_ci5_lower <- ci5["beta", 1]
+        beta_ci5_upper <- ci5["beta", 2]
+      }
+      
+      # 99% доверительный интервал (1% уровень значимости)
+      ci1 <- suppressWarnings(confint(fit, level = 0.99))
+      if (is.matrix(ci1) && nrow(ci1) >= 2) {
+        alpha_ci1_lower <- ci1["alpha", 1]
+        alpha_ci1_upper <- ci1["alpha", 2]
+        beta_ci1_lower <- ci1["beta", 1]
+        beta_ci1_upper <- ci1["beta", 2]
+      }
+    }, error = function(e) {
+      # Если не удалось рассчитать CI, оставляем NA
+    })
+    
+    return(tibble(alpha = alpha_val, beta = beta_val, n_points = n_points,
+                  r2 = r2, rmse = rmse, status = "Success",
+                  alpha_ci5_lower = alpha_ci5_lower, alpha_ci5_upper = alpha_ci5_upper,
+                  alpha_ci1_lower = alpha_ci1_lower, alpha_ci1_upper = alpha_ci1_upper,
+                  beta_ci5_lower = beta_ci5_lower, beta_ci5_upper = beta_ci5_upper,
+                  beta_ci1_lower = beta_ci1_lower, beta_ci1_upper = beta_ci1_upper))
+  }
+  
+  # резервный грид-поиск
+  grid_a <- c(0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12, 0.2)
+  grid_b <- c(   5,    8,   10,   15,   20,   30,   40,  60)
+  best <- list(a = NA_real_, b = NA_real_, rss = Inf)
+  for (aa in grid_a){
+    for (bb in grid_b){
+      pred <- (aa*bb*db$Rg)/(aa*db$Rg + bb)
+      rss  <- sum((db$GPP - pred)^2)
+      if (is.finite(rss) && rss < best$rss) best <- list(a=aa, b=bb, rss=rss)
+    }
+  }
+  
+  if (is.finite(best$a) && is.finite(best$b)) {
+    pred <- (best$a*best$b*db$Rg)/(best$a*db$Rg + best$b)
+    ss_res <- sum((db$GPP - pred)^2)
+    ss_tot <- sum((db$GPP - mean(db$GPP))^2)
+    r2 <- ifelse(ss_tot > 0, 1 - ss_res/ss_tot, NA_real_)
+    rmse <- sqrt(mean((db$GPP - pred)^2))
+    return(tibble(alpha = best$a, beta = best$b, n_points = n_points,
+                  r2 = r2, rmse = rmse, status = "Grid search",
+                  alpha_ci5_lower = alpha_ci5_lower, alpha_ci5_upper = alpha_ci5_upper,
+                  alpha_ci1_lower = alpha_ci1_lower, alpha_ci1_upper = alpha_ci1_upper,
+                  beta_ci5_lower = beta_ci5_lower, beta_ci5_upper = beta_ci5_upper,
+                  beta_ci1_lower = beta_ci1_lower, beta_ci1_upper = beta_ci1_upper))
+  }
+  
+  return(tibble(alpha = NA_real_, beta = NA_real_, n_points = n_points,
+                r2 = NA_real_, rmse = NA_real_, status = "Fit error",
+                alpha_ci5_lower = alpha_ci5_lower, alpha_ci5_upper = alpha_ci5_upper,
+                alpha_ci1_lower = alpha_ci1_lower, alpha_ci1_upper = alpha_ci1_upper,
+                beta_ci5_lower = beta_ci5_lower, beta_ci5_upper = beta_ci5_upper,
+                beta_ci1_lower = beta_ci1_lower, beta_ci1_upper = beta_ci1_upper))
+}
+
+# Расчет коэффициентов с статистикой
+coef_tbl_detailed <- light_all %>%
+  group_by(Year, Phase_lab) %>%
+  group_modify(~fit_lrc_rg_with_stats(.x)) %>%
+  ungroup()
+
+# Функция для расчета продолжительности фенофазы в днях
+calculate_phase_duration <- function(year, phase_ru) {
+  phase_en_map <- c("Всходы" = "Emergence", "Кущение" = "Tillering",
+                    "Выход в трубку" = "StemElong", "Колошение" = "Heading",
+                    "Цветение" = "Flowering", "Созревание" = "Ripening")
+  
+  phase_ru_char <- as.character(phase_ru)
+  phase_en <- phase_en_map[phase_ru_char]
+  if (is.na(phase_en) || length(phase_en) == 0) return(NA_integer_)
+  phase_en <- unname(phase_en)
+  
+  bounds <- switch(as.character(year),
+                   "2013" = B2013,
+                   "2016" = B2016,
+                   "2023" = B2023,
+                   NULL)
+  
+  if (is.null(bounds)) return(NA_integer_)
+  
+  # Определяем начало и конец фазы
+  phase_start <- switch(phase_en,
+                        "Emergence" = bounds$Emergence,
+                        "Tillering" = bounds$Tillering,
+                        "StemElong" = bounds$StemElong,
+                        "Heading" = bounds$Heading,
+                        "Flowering" = bounds$Flowering,
+                        "Ripening" = bounds$Ripening,
+                        NA_character_)
+  
+  phase_end <- switch(phase_en,
+                      "Emergence" = bounds$Tillering,
+                      "Tillering" = bounds$StemElong,
+                      "StemElong" = bounds$Heading,
+                      "Heading" = bounds$Flowering,
+                      "Flowering" = bounds$Ripening,
+                      "Ripening" = bounds$Harvesting,
+                      NA_character_)
+  
+  if (is.na(phase_start) || is.na(phase_end)) return(NA_integer_)
+  
+  duration <- as.numeric(as.Date(phase_end) - as.Date(phase_start))
+  return(as.integer(duration))
+}
+
+# Добавляем продолжительность фенофаз, английские названия и GPPmax
+coef_tbl_detailed <- coef_tbl_detailed %>%
+  rowwise() %>%
+  mutate(
+    Phase_duration_days = calculate_phase_duration(Year, as.character(Phase_lab)),
+    Phase_en = factor(as.character(Phase_lab),
+                      levels = PHASE6_RU,
+                      labels = PHASE6_EN),
+    GPPmax = beta,
+    GPPmax_ci5_lower = beta_ci5_lower,
+    GPPmax_ci5_upper = beta_ci5_upper,
+    GPPmax_ci1_lower = beta_ci1_lower,
+    GPPmax_ci1_upper = beta_ci1_upper
+  ) %>%
+  ungroup()
+
+# Вывод результатов в консоль
+cat("Коэффициенты α, GPPmax (= β) для световых кривых по годам и фенофазам:\n\n")
+
+# Форматированный вывод
+coef_tbl_detailed %>%
+  mutate(
+    Phase_lab = as.character(Phase_lab),
+    Phase_en = as.character(Phase_en),
+    alpha_fmt = ifelse(is.finite(alpha), sprintf("%.4f", alpha), "н/д"),
+    GPPmax_fmt = ifelse(is.finite(GPPmax), sprintf("%.2f", GPPmax), "н/д"),
+    r2_fmt = ifelse(is.finite(r2), sprintf("%.3f", r2), "н/д"),
+    rmse_fmt = ifelse(is.finite(rmse), sprintf("%.3f", rmse), "н/д"),
+    duration_fmt = ifelse(is.finite(Phase_duration_days),
+                          sprintf("%d дн.", Phase_duration_days), "н/д")
+  ) %>%
+  arrange(Year, Phase_lab) %>%
+  select(Year, Phase_lab, Phase_en, duration_fmt, alpha_fmt, GPPmax_fmt,
+         n_points, r2_fmt, rmse_fmt, status) %>%
+  print()
+
+cat("\n")
+
+# Сводная таблица по годам
+cat("Сводная статистика по годам:\n")
+coef_tbl_detailed %>%
+  filter(is.finite(alpha), is.finite(GPPmax)) %>%
+  group_by(Year) %>%
+  summarise(
+    n_phases = n(),
+    total_duration_days = sum(Phase_duration_days, na.rm=TRUE),
+    avg_phase_duration = mean(Phase_duration_days, na.rm=TRUE),
+    alpha_mean = mean(alpha, na.rm=TRUE),
+    alpha_sd = sd(alpha, na.rm=TRUE),
+    GPPmax_mean = mean(GPPmax, na.rm=TRUE),
+    GPPmax_sd = sd(GPPmax, na.rm=TRUE),
+    r2_mean = mean(r2, na.rm=TRUE),
+    .groups="drop"
+  ) %>%
+  mutate(
+    alpha_str = sprintf("%.4f +/- %.4f", alpha_mean, alpha_sd),
+    GPPmax_str = sprintf("%.2f +/- %.2f", GPPmax_mean, GPPmax_sd),
+    r2_str = sprintf("%.3f", r2_mean),
+    duration_str = sprintf("%.1f", avg_phase_duration)
+  ) %>%
+  select(Year, n_phases, total_duration_days, duration_str, alpha_str, GPPmax_str, r2_str) %>%
+  print()
+
+cat("\n")
+
+# Сводная таблица по фенофазам
+cat("Сводная статистика по фенофазам:\n")
+coef_tbl_detailed %>%
+  filter(is.finite(alpha), is.finite(GPPmax)) %>%
+  group_by(Phase_lab, Phase_en) %>%
+  summarise(
+    n_years = n(),
+    avg_duration_days = mean(Phase_duration_days, na.rm=TRUE),
+    alpha_mean = mean(alpha, na.rm=TRUE),
+    alpha_sd = sd(alpha, na.rm=TRUE),
+    GPPmax_mean = mean(GPPmax, na.rm=TRUE),
+    GPPmax_sd = sd(GPPmax, na.rm=TRUE),
+    r2_mean = mean(r2, na.rm=TRUE),
+    .groups="drop"
+  ) %>%
+  mutate(
+    alpha_str = sprintf("%.4f +/- %.4f", alpha_mean, alpha_sd),
+    GPPmax_str = sprintf("%.2f +/- %.2f", GPPmax_mean, GPPmax_sd),
+    r2_str = sprintf("%.3f", r2_mean),
+    duration_str = sprintf("%.1f", avg_duration_days)
+  ) %>%
+  select(Phase_lab, Phase_en, n_years, duration_str, alpha_str, GPPmax_str, r2_str) %>%
+  print()
+
+cat("\n")
+
+# Сохранение подробной таблицы с английскими названиями
+coef_tbl_for_csv <- coef_tbl_detailed %>%
+  mutate(
+    Phase_ru = as.character(Phase_lab),
+    Phase_en = as.character(Phase_en)
+  ) %>%
+  select(Year, Phase_ru, Phase_en, Phase_duration_days,
+         alpha, alpha_ci5_lower, alpha_ci5_upper, alpha_ci1_lower, alpha_ci1_upper,
+         GPPmax, GPPmax_ci5_lower, GPPmax_ci5_upper, GPPmax_ci1_lower, GPPmax_ci1_upper,
+         n_points, r2, rmse, status) %>%
+  arrange(Year, Phase_en)
+
+readr::write_csv(
+  coef_tbl_for_csv,
+  "light_response_coefficients_by_year_phase.csv"
+)
+
+cat("✓ Подробная таблица коэффициентов сохранена: light_response_coefficients_by_year_phase.csv\n")
+cat("  Включает: английские названия фаз, продолжительность в днях, доверительные интервалы (5% и 1%)\n")
+cat("\n========================================\n\n")
+
+# ==============================================================================
+# GPPmax: МАКСИМАЛЬНАЯ ФОТОСИНТЕТИЧЕСКАЯ СПОСОБНОСТЬ ПО ФЕНОФАЗАМ И ГОДАМ
+# ==============================================================================
+
+cat("\n========================================\n")
+cat("GPPmax (МАКСИМАЛЬНАЯ ФОТОСИНТЕТИЧЕСКАЯ СПОСОБНОСТЬ)\n")
+cat("GPPmax = beta из прямоугольной гиперболы: GPP = (alpha*beta*Rg)/(alpha*Rg+beta)\n")
+cat("При Rg -> inf, GPP -> beta = GPPmax\n")
+cat("========================================\n\n")
+
+# Сводная таблица GPPmax: фазы как строки, годы как столбцы
+gppmax_wide <- coef_tbl_detailed %>%
+  filter(is.finite(GPPmax)) %>%
+  mutate(
+    GPPmax_str = sprintf("%.2f", GPPmax),
+    Phase_en = as.character(Phase_en)
+  ) %>%
+  select(Year, Phase_lab, Phase_en, GPPmax_str) %>%
+  pivot_wider(
+    id_cols = c(Phase_lab, Phase_en),
+    names_from = Year,
+    values_from = GPPmax_str,
+    names_prefix = "GPPmax_"
+  )
+
+cat("GPPmax по годам и фенофазам (umol CO2 m-2 s-1):\n\n")
+print(gppmax_wide, n = Inf)
+
+# GPPmax: сводка по годам
+cat("\nGPPmax - сводка по годам:\n")
+coef_tbl_detailed %>%
+  filter(is.finite(GPPmax)) %>%
+  group_by(Year) %>%
+  summarise(
+    n_phases = n(),
+    GPPmax_mean = mean(GPPmax, na.rm=TRUE),
+    GPPmax_sd = sd(GPPmax, na.rm=TRUE),
+    GPPmax_min = min(GPPmax, na.rm=TRUE),
+    GPPmax_max = max(GPPmax, na.rm=TRUE),
+    .groups="drop"
+  ) %>%
+  mutate(GPPmax_str = sprintf("%.2f +/- %.2f (min: %.2f, max: %.2f)",
+                              GPPmax_mean, GPPmax_sd, GPPmax_min, GPPmax_max)) %>%
+  select(Year, n_phases, GPPmax_str) %>%
+  print()
+
+# GPPmax: сводка по фенофазам
+cat("\nGPPmax - сводка по фенофазам (среднее за 3 года):\n")
+coef_tbl_detailed %>%
+  filter(is.finite(GPPmax)) %>%
+  group_by(Phase_lab, Phase_en) %>%
+  summarise(
+    n_years = n(),
+    GPPmax_mean = mean(GPPmax, na.rm=TRUE),
+    GPPmax_sd = sd(GPPmax, na.rm=TRUE),
+    .groups="drop"
+  ) %>%
+  mutate(GPPmax_str = sprintf("%.2f +/- %.2f", GPPmax_mean, GPPmax_sd)) %>%
+  select(Phase_lab, Phase_en, n_years, GPPmax_str) %>%
+  print()
+
+# Сохранение GPPmax в отдельный CSV
+gppmax_csv <- coef_tbl_detailed %>%
+  filter(is.finite(GPPmax)) %>%
+  select(Year, Phase_lab, Phase_en, Phase_duration_days,
+         GPPmax, GPPmax_ci5_lower, GPPmax_ci5_upper,
+         GPPmax_ci1_lower, GPPmax_ci1_upper,
+         alpha, r2, rmse, n_points, status) %>%
+  arrange(Year, Phase_lab)
+
+readr::write_csv(gppmax_csv, "GPPmax_by_year_phase.csv")
+cat("\n✓ Таблица GPPmax сохранена: GPPmax_by_year_phase.csv\n")
+cat("\n========================================\n\n")
+
+# ==============================================================================
+# МЕЖГОДОВЫЕ (POOLED) КОЭФФИЦИЕНТЫ α И GPPmax: АППРОКСИМАЦИЯ ПО ВСЕМ 3 ГОДАМ
+# ==============================================================================
+# Вместо усреднения α и β по трем годам, объединяем все наблюдения
+# каждой фенофазы за 3 года и фитируем ОДНУ световую кривую.
+# Это дает устойчивые «среднеклиматические» параметры.
+# ==============================================================================
+
+cat("\n========================================\n")
+cat("МЕЖГОДОВЫЕ (POOLED) КОЭФФИЦИЕНТЫ α И GPPmax\n")
+cat("Аппроксимация объединённых данных 3 лет для каждой фенофазы\n")
+cat("========================================\n\n")
+
+# 1) Фит по объединённым данным (group_by Phase_lab ONLY, без Year)
+coef_pooled <- light_all %>%
+  group_by(Phase_lab) %>%
+  group_modify(~fit_lrc_rg_with_stats(.x)) %>%
+  ungroup() %>%
+  mutate(
+    GPPmax = beta,
+    GPPmax_ci5_lower = beta_ci5_lower,
+    GPPmax_ci5_upper = beta_ci5_upper,
+    method = "pooled_3yr_fit"
+  )
+
+cat("Результаты межгодовой аппроксимации (pooled fit):\n\n")
+coef_pooled %>%
+  mutate(
+    alpha_fmt = ifelse(is.finite(alpha), sprintf("%.4f", alpha), "н/д"),
+    GPPmax_fmt = ifelse(is.finite(GPPmax), sprintf("%.2f", GPPmax), "н/д"),
+    r2_fmt = ifelse(is.finite(r2), sprintf("%.3f", r2), "н/д"),
+    rmse_fmt = ifelse(is.finite(rmse), sprintf("%.3f", rmse), "н/д"),
+    ci_fmt = ifelse(is.finite(GPPmax_ci5_lower),
+                    sprintf("[%.2f; %.2f]", GPPmax_ci5_lower, GPPmax_ci5_upper), "н/д")
+  ) %>%
+  select(Phase_lab, alpha_fmt, GPPmax_fmt, ci_fmt, n_points, r2_fmt, rmse_fmt, status) %>%
+  print(n = Inf)
+
+# 2) Сравнение: усреднённые vs pooled
+cat("\nСравнение подходов (averaged vs pooled fit):\n\n")
+avg_by_phase <- coef_tbl_detailed %>%
+  filter(is.finite(alpha), is.finite(GPPmax)) %>%
+  group_by(Phase_lab) %>%
+  summarise(
+    alpha_avg = mean(alpha, na.rm = TRUE),
+    GPPmax_avg = mean(GPPmax, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+comparison <- coef_pooled %>%
+  select(Phase_lab, alpha_pooled = alpha, GPPmax_pooled = GPPmax, r2_pooled = r2) %>%
+  left_join(avg_by_phase, by = "Phase_lab") %>%
+  mutate(
+    alpha_diff_pct  = ifelse(is.finite(alpha_avg) & alpha_avg != 0,
+                              (alpha_pooled - alpha_avg) / alpha_avg * 100, NA_real_),
+    GPPmax_diff_pct = ifelse(is.finite(GPPmax_avg) & GPPmax_avg != 0,
+                              (GPPmax_pooled - GPPmax_avg) / GPPmax_avg * 100, NA_real_)
+  )
+
+comparison %>%
+  mutate(
+    across(c(alpha_pooled, alpha_avg), ~sprintf("%.4f", .x)),
+    across(c(GPPmax_pooled, GPPmax_avg), ~sprintf("%.2f", .x)),
+    r2_pooled = sprintf("%.3f", r2_pooled),
+    alpha_diff_pct = sprintf("%+.1f%%", alpha_diff_pct),
+    GPPmax_diff_pct = sprintf("%+.1f%%", GPPmax_diff_pct)
+  ) %>%
+  select(Phase_lab, alpha_pooled, alpha_avg, alpha_diff_pct,
+         GPPmax_pooled, GPPmax_avg, GPPmax_diff_pct, r2_pooled) %>%
+  print(n = Inf)
+
+# 3) Pooled кривые для графика
+curve_pooled <- coef_pooled %>%
+  filter(is.finite(alpha), is.finite(beta)) %>%
+  rowwise() %>%
+  mutate(
+    data = list({
+      xs_ppfd <- seq(0, 2000, length.out = 200)
+      xs_rg   <- bigleaf::PPFD.to.Rg(xs_ppfd)
+      tibble(PPFD = xs_ppfd,
+             GPP_hat = (alpha * beta * xs_rg) / (alpha * xs_rg + beta))
+    })
+  ) %>%
+  ungroup() %>%
+  tidyr::unnest(data) %>%
+  select(Phase_lab, PPFD, GPP_hat)
+
+# 4) График: погодовые + pooled (чёрная жирная)
+anno_pooled <- coef_pooled %>%
+  filter(is.finite(alpha), is.finite(GPPmax)) %>%
+  mutate(
+    x = x_pad,
+    y = y_max_fixed - top_pad - 3 * y_step,  # 4-я строка (после 3 годов)
+    label = sprintf("Pooled: α = %s  GPPmax = %s",
+                    fmt_num(alpha), fmt_num(GPPmax))
+  )
+
+p_pooled <- ggplot() +
+  geom_point(data = light_all, aes(PPFD, GPP, color = factor(Year)),
+             alpha = 0.2, size = 0.8) +
+  geom_line(data = curve_tbl, aes(PPFD, GPP_hat, color = factor(Year)),
+            linewidth = 0.8, alpha = 0.7) +
+  geom_line(data = curve_pooled, aes(PPFD, GPP_hat),
+            color = "black", linewidth = 1.4, linetype = "solid") +
+  geom_text(data = anno_fixed, aes(x = x, y = y, label = label, color = factor(Year)),
+            hjust = 0, vjust = 1, size = 3.2, fontface = "bold") +
+  geom_text(data = anno_pooled, aes(x = x, y = y, label = label),
+            color = "black", hjust = 0, vjust = 1, size = 3.2, fontface = "bold") +
+  facet_wrap(~Phase_lab, ncol = 3, scales = "fixed") +
+  scale_color_manual(values = pal_year, name = "Год") +
+  scale_y_continuous(limits = c(0, y_max_fixed), breaks = y_breaks,
+                     expand = expansion(mult = c(0, 0.02))) +
+  labs(title = "Световые кривые: погодовые + межгодовая аппроксимация (pooled, чёрная)",
+       x = "PPFD (µmol photons m⁻² s⁻¹)",
+       y = "GPP (µmol CO₂ m⁻² s⁻¹)") +
+  theme_base
+
+print(p_pooled)
+# ggsave("lightRG_pooled_vs_yearly.png", p_pooled, width=14, height=9, dpi=300, bg="white")
+
+# 5) Сохранение
+readr::write_csv(
+  coef_pooled %>%
+    mutate(Phase_en = PHASE6_EN[match(as.character(Phase_lab), PHASE6_RU)]) %>%
+    select(Phase_lab, Phase_en, alpha,
+           alpha_ci5_lower, alpha_ci5_upper,
+           GPPmax, GPPmax_ci5_lower, GPPmax_ci5_upper,
+           n_points, r2, rmse, status, method),
+  "light_response_coefficients_pooled.csv"
+)
+cat("\n✓ Межгодовые pooled-коэффициенты сохранены: light_response_coefficients_pooled.csv\n")
+cat("========================================\n\n")
+
+# ==============================================================================
+# ТАБЛИЦА ДНЕВНЫХ ЗНАЧЕНИЙ PPFD ПО ВСЕМ ТРЕМ ГОДАМ
+# ==============================================================================
+
+cat("\n========================================\n")
+cat("СОЗДАНИЕ ТАБЛИЦЫ ДНЕВНЫХ ЗНАЧЕНИЙ PPFD\n")
+cat("========================================\n\n")
+
+# Функция для поиска PPFD колонки (может быть PPFD, ppfd, ppfd_f и т.д.)
+find_ppfd_column <- function(df) {
+  nm <- names(df)
+  candidates <- c("PPFD", "ppfd", "ppfd_f", "PPFD_f", "ppfd_fall", "ppfd_orig", 
+                  "PPFD_mean", "ppfd_mean", "ppfd_u50", "PPFD_u50")
+  for (cand in candidates) {
+    if (cand %in% nm) {
+      return(cand)
+    }
+  }
+  # Поиск по паттерну
+  ppfd_cols <- nm[str_detect(tolower(nm), "ppfd|par")]
+  if (length(ppfd_cols) > 0) {
+    return(ppfd_cols[1])
+  }
+  return(NA_character_)
+}
+
+# Подготовка данных для каждого года
+cat("Подготовка данных PPFD для каждого года...\n")
+
+# 2013
+if (exists("df13") && "PPFD" %in% names(df13)) {
+  ppfd_col_13 <- find_ppfd_column(df13)
+  if (!is.na(ppfd_col_13)) {
+    df13_ppfd <- df13 %>%
+      filter(!is.na(Phase_lab), is.finite(.data[[ppfd_col_13]])) %>%
+      mutate(
+        Days_from_sowing = as.numeric(Date - as.Date(B2013$Sowing)) + 1,
+        PPFD_value = safe_num(.data[[ppfd_col_13]]),
+        Year = 2013L
+      ) %>%
+      select(Year, Date, Days_from_sowing, Phase_lab, PPFD_value)
+    cat("  2013: найдено", nrow(df13_ppfd), "записей с PPFD\n")
+  } else {
+    cat("  2013: PPFD колонка не найдена\n")
+    df13_ppfd <- tibble(Year = integer(), Date = as.Date(character()), 
+                        Days_from_sowing = integer(), Phase_lab = factor(), 
+                        PPFD_value = numeric())
+  }
+} else {
+  cat("  2013: df13 не найден или не содержит PPFD\n")
+  df13_ppfd <- tibble(Year = integer(), Date = as.Date(character()), 
+                      Days_from_sowing = integer(), Phase_lab = factor(), 
+                      PPFD_value = numeric())
+}
+
+# 2016
+if (exists("df16") && "PPFD" %in% names(df16)) {
+  ppfd_col_16 <- find_ppfd_column(df16)
+  if (!is.na(ppfd_col_16)) {
+    df16_ppfd <- df16 %>%
+      filter(!is.na(Phase_lab), is.finite(.data[[ppfd_col_16]])) %>%
+      mutate(
+        Days_from_sowing = as.numeric(Date - as.Date(B2016$Sowing)) + 1,
+        PPFD_value = safe_num(.data[[ppfd_col_16]]),
+        Year = 2016L
+      ) %>%
+      select(Year, Date, Days_from_sowing, Phase_lab, PPFD_value)
+    cat("  2016: найдено", nrow(df16_ppfd), "записей с PPFD\n")
+  } else {
+    cat("  2016: PPFD колонка не найдена\n")
+    df16_ppfd <- tibble(Year = integer(), Date = as.Date(character()), 
+                        Days_from_sowing = integer(), Phase_lab = factor(), 
+                        PPFD_value = numeric())
+  }
+} else {
+  cat("  2016: df16 не найден или не содержит PPFD\n")
+  df16_ppfd <- tibble(Year = integer(), Date = as.Date(character()), 
+                      Days_from_sowing = integer(), Phase_lab = factor(), 
+                      PPFD_value = numeric())
+}
+
+# 2023
+if (exists("df23") && "PPFD" %in% names(df23)) {
+  ppfd_col_23 <- find_ppfd_column(df23)
+  if (!is.na(ppfd_col_23)) {
+    df23_ppfd <- df23 %>%
+      filter(!is.na(Phase_lab), is.finite(.data[[ppfd_col_23]])) %>%
+      mutate(
+        Days_from_sowing = as.numeric(Date - as.Date(B2023$Sowing)) + 1,
+        PPFD_value = safe_num(.data[[ppfd_col_23]]),
+        Year = 2023L
+      ) %>%
+      select(Year, Date, Days_from_sowing, Phase_lab, PPFD_value)
+    cat("  2023: найдено", nrow(df23_ppfd), "записей с PPFD\n")
+  } else {
+    cat("  2023: PPFD колонка не найдена\n")
+    df23_ppfd <- tibble(Year = integer(), Date = as.Date(character()), 
+                        Days_from_sowing = integer(), Phase_lab = factor(), 
+                        PPFD_value = numeric())
+  }
+} else {
+  cat("  2023: df23 не найден или не содержит PPFD\n")
+  df23_ppfd <- tibble(Year = integer(), Date = as.Date(character()), 
+                      Days_from_sowing = integer(), Phase_lab = factor(), 
+                      PPFD_value = numeric())
+}
+
+# Объединение всех данных
+ppfd_all <- bind_rows(df13_ppfd, df16_ppfd, df23_ppfd)
+
+cat("\nВсего записей:", nrow(ppfd_all), "\n")
+
+# Агрегация по дням (среднее PPFD за день)
+ppfd_daily <- ppfd_all %>%
+  filter(is.finite(PPFD_value), PPFD_value >= 0) %>%
+  group_by(Year, Date, Days_from_sowing, Phase_lab) %>%
+  summarise(
+    PPFD_f = mean(PPFD_value, na.rm = TRUE),
+    n_obs = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Phase_en = factor(as.character(Phase_lab), 
+                      levels = PHASE6_RU, 
+                      labels = PHASE6_EN)
+  ) %>%
+  select(Year, Days_from_sowing, Phase_en, PPFD_f) %>%
+  arrange(Year, Days_from_sowing)
+
+cat("Дневных значений после агрегации:", nrow(ppfd_daily), "\n")
+
+# Диагностика
+cat("\nДиагностика по годам:\n")
+ppfd_daily %>%
+  group_by(Year) %>%
+  summarise(
+    n_days = n(),
+    ppfd_mean = mean(PPFD_f, na.rm = TRUE),
+    ppfd_min = min(PPFD_f, na.rm = TRUE),
+    ppfd_max = max(PPFD_f, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  print()
+
+cat("\nДиагностика по фенофазам:\n")
+ppfd_daily %>%
+  group_by(Phase_en) %>%
+  summarise(
+    n_days = n(),
+    ppfd_mean = mean(PPFD_f, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  print()
+
+# Сохранение в CSV
+readr::write_csv(
+  ppfd_daily,
+  "daily_PPFD_by_year_phase.csv"
+)
+
+cat("\n✓ Таблица дневных значений PPFD сохранена: daily_PPFD_by_year_phase.csv\n")
+cat("  Структура: Год; День вегетационного периода; Фенофаза (англ.); PPFD_f\n")
+cat("\n========================================\n\n")
+
+# ----- подготовка по году: выбираем ровно по 1 колонке для GPP/LE/VPD/Tair и считаем WUE -----
+# Используем bigleaf::LE.to.ET() для корректного расчета эвапотранспирации
+prep_year_wue <- function(df, year){
+  stopifnot(all(c("datetime","Phase_lab") %in% names(df)))
+  nm <- names(df)
+
+  gpp_col  <- first_or_stop(df,
+                            c("GPP","gpp","gpp_dt_u50","gpp_dt_u_star","gpp_u50_f","gpp_u_star_f"),
+                            "GPP")
+  # Приоритет для _f (filled - заполненных) данных
+  le_col   <- pick_first_present(nm, c("LE_f","le_f","LE","le","le_orig","le_u50_f","le_u_star_f","le_fall"))
+  vpd_col  <- pick_first_present(nm, c("VPD_f","vpd_f","VPD","vpd","vpd_orig"))
+  tair_col <- pick_first_present(nm, c("Tair_f","tair_f","Tair","TA","ta","tair","tair_orig","air_temp","t_air"))
+  ppfd_col <- pick_first_present(nm, c("PPFD_f","ppfd_f","PPFD","ppfd","ppfd_in","par_in"))
+
+  out <- df %>%
+    transmute(
+      Year      = as.integer(year),
+      datetime  = as.POSIXct(datetime, tz = "UTC"),
+      Phase_lab = factor(Phase_lab, levels = PHASE6_RU),
+      GPP  = safe_num(.data[[gpp_col]]),          # μmol CO2 m-2 s-1
+      LE   = if (!is.na(le_col))   safe_num(.data[[le_col]])   else NA_real_,  # W m-2
+      VPD  = if (!is.na(vpd_col))  safe_num(.data[[vpd_col]])  else NA_real_,  # kPa
+      Tair = if (!is.na(tair_col)) safe_num(.data[[tair_col]]) else NA_real_,  # °C
+      PPFD = if (!is.na(ppfd_col)) safe_num(.data[[ppfd_col]]) else NA_real_   # μmol m-2 s-1
+    ) %>%
+    mutate(
+      # Используем bigleaf для конвертации LE в ET
+      # LE.to.ET возвращает kg m-2 s-1, переводим в mmol m-2 s-1 (* 1000 / 0.018)
+      ET_kg = ifelse(is.finite(LE) & is.finite(Tair),
+                     bigleaf::LE.to.ET(LE, Tair),
+                     ifelse(is.finite(LE), LE / 2.45e6, NA_real_)),  # fallback если нет Tair
+      E_mmol = ET_kg * 1000 / 0.018,  # mmol H2O m-2 s-1
+
+      # WUE = GPP / ET (μmol CO2 / mmol H2O)
+      WUE  = ifelse(is.finite(E_mmol) & E_mmol > 0 & is.finite(GPP),
+                    GPP / E_mmol, NA_real_),
+
+      # iWUE (intrinsic WUE) = GPP * VPD / ET (μmol CO2 kPa / mmol H2O)
+      # Также известен как underlying WUE (uWUE)
+      IWUE = ifelse(is.finite(E_mmol) & E_mmol > 0 & is.finite(GPP) & is.finite(VPD),
+                    GPP * VPD / E_mmol, NA_real_)
+    ) %>%
+    # фильтр очевидных выбросов/некорректных значений
+    filter(!is.na(Phase_lab),
+           is.finite(WUE),  WUE  >= 0,  WUE  <= 40,
+           is.finite(GPP),  GPP  >= 0,  GPP  <= 40,
+           is.finite(LE),   LE   >= 5) %>%      # исключаем почти нулевой LE
+    select(Year, datetime, Phase_lab, GPP, LE, VPD, Tair, PPFD, E_mmol, WUE, IWUE)
+
+  out
+}
+
+# ----- применяем к трём годам -----
+stopifnot(exists("df13"), exists("df16"), exists("df23"))
+df13$Phase_lab <- factor(df13$Phase_lab, levels = PHASE6_RU)
+df16$Phase_lab <- factor(df16$Phase_lab, levels = PHASE6_RU)
+df23$Phase_lab <- factor(df23$Phase_lab, levels = PHASE6_RU)
+
+w13 <- prep_year_wue(df13, 2013)
+w16 <- prep_year_wue(df16, 2016)
+w23 <- prep_year_wue(df23, 2023)
+
+w_all <- bind_rows(w13, w16, w23)
+
+# ----- сводные таблицы для барплотов -----
+summarise_wue <- function(d, value = "WUE"){
+  d %>%
+    group_by(Year, Phase_lab) %>%
+    summarise(
+      n  = dplyr::n(),
+      mn = mean(.data[[value]], na.rm = TRUE),
+      sd = sd(.data[[value]],   na.rm = TRUE),
+      se = sd / sqrt(n),
+      .groups = "drop"
+    ) %>%
+    mutate(Year = factor(Year)) %>%
+    arrange(Phase_lab, Year)
+}
+
+wue_phase  <- summarise_wue(w_all, "WUE")
+iwue_phase <- w_all %>% filter(is.finite(IWUE)) %>% summarise_wue("IWUE")
+
+# общий верхний предел для единой оси Y (по WUE)
+ymax_wue <- suppressWarnings(max(wue_phase$mn + 1.96*wue_phase$se, na.rm = TRUE))
+if (!is.finite(ymax_wue) || ymax_wue <= 1) ymax_wue <- 10
+ybreaks_wue <- pretty(c(0, ymax_wue), 6); ymax_wue <- max(ybreaks_wue)
+
+# ----- график: WUE по фазам (барплот с SE) -----
+pos <- position_dodge(width = 0.8)
+p_wue_phase <- ggplot(wue_phase, aes(x = Year, y = mn, fill = Year)) +
+  geom_col(position = pos, width = 0.7, alpha = 0.9) +
+  geom_errorbar(aes(ymin = pmax(0, mn - 1.96*se), ymax = mn + 1.96*se),
+                position = pos, width = 0.2, linewidth = 0.5) +
+  facet_wrap(~Phase_lab, ncol = 3, scales = "fixed") +
+  scale_fill_manual(values = pal_year, guide = "none") +
+  scale_y_continuous(limits = c(0, ymax_wue), breaks = ybreaks_wue,
+                     expand = expansion(mult = c(0, 0.02))) +
+  labs(title = "WUE по фенофазам",
+       x = "Год", y = "WUE (μmol CO₂ per mmol H₂O)") +
+  theme_bw(base_size = 12) +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(linewidth=0.2, colour="grey85"),
+        strip.background  = element_rect(fill="grey95", colour="grey80"))
+
+print(p_wue_phase)
+ggsave("WUE_by_phase_bar.png", p_wue_phase, width = 12, height = 8, dpi = 300, bg = "white")
+
+# ----- (опционально) IWUE, если есть VPD -----
+if (nrow(iwue_phase) > 0) {
+  ymax_iwue <- suppressWarnings(max(iwue_phase$mn + 1.96*iwue_phase$se, na.rm = TRUE))
+  if (!is.finite(ymax_iwue) || ymax_iwue <= 1) ymax_iwue <- 20
+  ybreaks_iwue <- pretty(c(0, ymax_iwue), 6); ymax_iwue <- max(ybreaks_iwue)
+
+  p_iwue_phase <- ggplot(iwue_phase, aes(x = Year, y = mn, fill = Year)) +
+    geom_col(position = pos, width = 0.7, alpha = 0.9) +
+    geom_errorbar(aes(ymin = pmax(0, mn - 1.96*se), ymax = mn + 1.96*se),
+                  position = pos, width = 0.2, linewidth = 0.5) +
+    facet_wrap(~Phase_lab, ncol = 3, scales = "fixed") +
+    scale_fill_manual(values = pal_year, guide = "none") +
+    scale_y_continuous(limits = c(0, ymax_iwue), breaks = ybreaks_iwue,
+                       expand = expansion(mult = c(0, 0.02))) +
+    labs(title = "IWUE по фенофазам",
+         x = "Год", y = "IWUE = GPP×VPD / E (μmol CO₂ kPa per mmol H₂O)") +
+    theme_bw(base_size = 12) +
+    theme(panel.grid.minor = element_blank(),
+          panel.grid.major = element_line(linewidth=0.2, colour="grey85"),
+          strip.background  = element_rect(fill="grey95", colour="grey80"))
+
+  print(p_iwue_phase)
+  ggsave("IWUE_by_phase_bar.png", p_iwue_phase, width = 12, height = 8, dpi = 300, bg = "white")
+} else {
+  message("IWUE не построен: VPD отсутствует хотя бы в одном году/фазе.")
+}
+
+# ----- (дополнительно) суммарное сравнение по году без разбиения на фазы -----
+wue_year <- w_all %>%
+  group_by(Year) %>%
+  summarise(n = dplyr::n(),
+            mn = mean(WUE, na.rm=TRUE),
+            sd = sd(WUE, na.rm=TRUE),
+            se = sd/sqrt(n), .groups="drop") %>%
+  mutate(Year = factor(Year))
+
+ymax_year <- suppressWarnings(max(wue_year$mn + 1.96*wue_year$se, na.rm=TRUE))
+if (!is.finite(ymax_year) || ymax_year <= 1) ymax_year <- ymax_wue
+ybreaks_year <- pretty(c(0, ymax_year), 6); ymax_year <- max(ybreaks_year)
+
+p_wue_year <- ggplot(wue_year, aes(Year, mn, fill = Year)) +
+  geom_col(width = 0.6, alpha = 0.9) +
+  geom_errorbar(aes(ymin = pmax(0, mn - 1.96*se), ymax = mn + 1.96*se),
+                width = 0.2, linewidth = 0.5) +
+  scale_fill_manual(values = pal_year, guide = "none") +
+  scale_y_continuous(limits = c(0, ymax_year), breaks = ybreaks_year,
+                     expand = expansion(mult = c(0, 0.02))) +
+  labs(title = "WUE — сравнение по годам (весь сезон)",
+       x = "Год", y = "WUE (μmol CO₂ per mmol H₂O)") +
+  theme_bw(base_size = 12) +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(linewidth=0.2, colour="grey85"))
+
+print(p_wue_year)
+ggsave("WUE_by_year_overall.png", p_wue_year, width = 8, height = 6, dpi = 300, bg = "white")
+
+# ==============================================================================
+# ДОПОЛНИТЕЛЬНЫЕ ГРАФИКИ WUE И iWUE
+# ==============================================================================
+
+cat("\n\nПостроение дополнительных графиков WUE и iWUE...\n")
+
+# ----- Boxplot WUE по фенофазам (сравнение между годами) -----
+make_wue_boxplot_compare <- function(lang) {
+  L <- LABELS[[lang]]
+  ggplot(w_all, aes(x = Phase_lab, y = WUE, fill = factor(Year))) +
+    geom_boxplot(alpha = 0.7, outlier.size = 0.5) +
+    scale_fill_manual(values = pal_year, name = L$year) +
+    labs(title = L$wue_comparison,
+         x = L$phenophase, y = paste0("WUE (", L$wue_unit, ")")) +
+    theme_bw(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          panel.grid.minor = element_blank())
+}
+save_bilingual(make_wue_boxplot_compare, "WUE_boxplot_compare_years", width = 12, height = 6)
+
+# ----- Boxplot iWUE по фенофазам (сравнение между годами) -----
+if (sum(is.finite(w_all$IWUE)) > 10) {
+  make_iwue_boxplot_compare <- function(lang) {
+    L <- LABELS[[lang]]
+    ggplot(w_all %>% filter(is.finite(IWUE)),
+           aes(x = Phase_lab, y = IWUE, fill = factor(Year))) +
+      geom_boxplot(alpha = 0.7, outlier.size = 0.5) +
+      scale_fill_manual(values = pal_year, name = L$year) +
+      labs(title = L$iwue_comparison,
+           x = L$phenophase, y = paste0("iWUE (", L$iwue_unit, ")")) +
+      theme_bw(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            panel.grid.minor = element_blank())
+  }
+  save_bilingual(make_iwue_boxplot_compare, "iWUE_boxplot_compare_years", width = 12, height = 6)
+}
+
+# ----- Barplot WUE для каждого года отдельно -----
+for (yr in c(2013, 2016, 2023)) {
+  wue_yr <- wue_phase %>% filter(Year == yr)
+  if (nrow(wue_yr) > 0) {
+    p <- ggplot(wue_yr, aes(x = Phase_lab, y = mn, fill = Phase_lab)) +
+      geom_col(alpha = 0.8) +
+      geom_errorbar(aes(ymin = pmax(0, mn - 1.96*se), ymax = mn + 1.96*se),
+                    width = 0.3, linewidth = 0.5) +
+      scale_fill_brewer(palette = "Set2", guide = "none") +
+      labs(title = paste("WUE по фенофазам —", yr),
+           x = "Фенофаза", y = "WUE (μmol CO₂ / mmol H₂O)") +
+      theme_bw(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            panel.grid.minor = element_blank())
+
+    print(p)
+    ggsave(paste0("WUE_barplot_", yr, ".png"), p, width = 10, height = 6, dpi = 300, bg = "white")
+  }
+}
+
+# ----- Boxplot WUE для каждого года отдельно -----
+for (yr in c(2013, 2016, 2023)) {
+  w_yr <- w_all %>% filter(Year == yr)
+  if (nrow(w_yr) > 0) {
+    p <- ggplot(w_yr, aes(x = Phase_lab, y = WUE, fill = Phase_lab)) +
+      geom_boxplot(alpha = 0.7) +
+      scale_fill_brewer(palette = "Set2", guide = "none") +
+      labs(title = paste("WUE по фенофазам —", yr),
+           x = "Фенофаза", y = "WUE (μmol CO₂ / mmol H₂O)") +
+      theme_bw(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            panel.grid.minor = element_blank())
+
+    print(p)
+    ggsave(paste0("WUE_boxplot_", yr, ".png"), p, width = 10, height = 6, dpi = 300, bg = "white")
+  }
+}
+
+# ----- Barplot и Boxplot iWUE для каждого года отдельно -----
+for (yr in c(2013, 2016, 2023)) {
+  iwue_yr <- iwue_phase %>% filter(Year == yr)
+  w_yr <- w_all %>% filter(Year == yr, is.finite(IWUE))
+
+  if (nrow(iwue_yr) > 0) {
+    # Barplot
+    p_bar <- ggplot(iwue_yr, aes(x = Phase_lab, y = mn, fill = Phase_lab)) +
+      geom_col(alpha = 0.8) +
+      geom_errorbar(aes(ymin = pmax(0, mn - 1.96*se), ymax = mn + 1.96*se),
+                    width = 0.3, linewidth = 0.5) +
+      scale_fill_brewer(palette = "Set2", guide = "none") +
+      labs(title = paste("iWUE по фенофазам —", yr),
+           x = "Фенофаза", y = "iWUE (μmol CO₂ kPa / mmol H₂O)") +
+      theme_bw(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            panel.grid.minor = element_blank())
+
+    print(p_bar)
+    ggsave(paste0("iWUE_barplot_", yr, ".png"), p_bar, width = 10, height = 6, dpi = 300, bg = "white")
+  }
+
+  if (nrow(w_yr) > 0) {
+    # Boxplot
+    p_box <- ggplot(w_yr, aes(x = Phase_lab, y = IWUE, fill = Phase_lab)) +
+      geom_boxplot(alpha = 0.7) +
+      scale_fill_brewer(palette = "Set2", guide = "none") +
+      labs(title = paste("iWUE по фенофазам —", yr),
+           x = "Фенофаза", y = "iWUE (μmol CO₂ kPa / mmol H₂O)") +
+      theme_bw(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            panel.grid.minor = element_blank())
+
+    print(p_box)
+    ggsave(paste0("iWUE_boxplot_", yr, ".png"), p_box, width = 10, height = 6, dpi = 300, bg = "white")
+  }
+}
+
+# ==============================================================================
+# ЗАВИСИМОСТИ GPP ОТ VPD И PPFD ПО ФЕНОФАЗАМ
+# ==============================================================================
+
+cat("\nПостроение графиков GPP vs VPD и GPP vs PPFD...\n")
+
+keep_main_phases <- function(df) {
+  df %>%
+    filter(!is.na(Phase_lab), Phase_lab %in% PHASE6_RU) %>%
+    mutate(Phase_lab = factor(Phase_lab, levels = PHASE6_RU))
+}
+
+cat("\nПостроение графиков NEE vs VPD и NEE vs PPFD...\n")
+
+prep_nee <- function(df, year){
+  stopifnot("Phase_lab" %in% names(df))
+  df %>%
+    transmute(
+      Year = as.integer(year),
+      Phase_lab = factor(Phase_lab, levels = PHASE6_RU),
+      NEE = if ("NEE" %in% names(df)) to_num(NEE) else NA_real_,
+      VPD = if ("VPD" %in% names(df)) to_num(VPD) else NA_real_,
+      PPFD = if ("PPFD" %in% names(df)) to_num(PPFD) else NA_real_
+    )
+}
+
+nee_all <- bind_rows(
+  prep_nee(df13, 2013),
+  prep_nee(df16, 2016),
+  prep_nee(df23, 2023)
+) %>% keep_main_phases()
+
+# ----- NEE vs VPD по фенофазам для каждого года -----
+for (yr in c(2013, 2016, 2023)) {
+  n_yr <- nee_all %>%
+    filter(Year == yr, is.finite(VPD), is.finite(NEE))
+
+  if (nrow(n_yr) > 10) {
+    p <- ggplot(n_yr, aes(x = VPD, y = NEE)) +
+      geom_point(alpha = 0.3, size = 0.8, color = pal_year[as.character(yr)]) +
+      geom_smooth(method = "loess", se = TRUE, color = "black", linewidth = 0.8) +
+      facet_wrap(~Phase_lab, ncol = 3, scales = "free_x") +
+      labs(title = paste("NEE vs VPD по фенофазам —", yr),
+           x = "VPD (kPa)", y = "NEE (µmol CO₂ m⁻² s⁻¹)") +
+      theme_bw(base_size = 11) +
+      theme(panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey95"))
+
+    print(p)
+    ggsave(paste0("NEE_vs_VPD_", yr, ".png"), p, width = 12, height = 8, dpi = 300, bg = "white")
+  }
+}
+
+# ----- NEE vs PPFD по фенофазам для каждого года -----
+for (yr in c(2013, 2016, 2023)) {
+  n_yr <- nee_all %>%
+    filter(Year == yr, is.finite(PPFD), is.finite(NEE), PPFD > 10)
+
+  if (nrow(n_yr) > 10) {
+    p <- ggplot(n_yr, aes(x = PPFD, y = NEE)) +
+      geom_point(alpha = 0.3, size = 0.8, color = pal_year[as.character(yr)]) +
+      geom_smooth(method = "loess", se = TRUE, color = "black", linewidth = 0.8) +
+      facet_wrap(~Phase_lab, ncol = 3, scales = "free_x") +
+      labs(title = paste("NEE vs PPFD по фенофазам —", yr),
+           subtitle = "Только дневные значения (PPFD > 10)",
+           x = "PPFD (µmol m⁻² s⁻¹)", y = "NEE (µmol CO₂ m⁻² s⁻¹)") +
+      theme_bw(base_size = 11) +
+      theme(panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey95"))
+
+    print(p)
+    ggsave(paste0("NEE_vs_PPFD_", yr, ".png"), p, width = 12, height = 8, dpi = 300, bg = "white")
+  }
+}
+
+# ----- Сравнительные графики NEE vs VPD между годами -----
+nee_all_vpd <- nee_all %>% filter(is.finite(VPD), is.finite(NEE))
+if (nrow(nee_all_vpd) > 30) {
+  make_nee_vpd_compare <- function(lang) {
+    L <- LABELS[[lang]]
+    title_txt <- if (lang == "en") "NEE vs VPD by phenophase" else "NEE vs VPD по фенофазам"
+    ggplot(nee_all_vpd, aes(x = VPD, y = NEE, color = factor(Year))) +
+      geom_point(alpha = 0.2, size = 0.5) +
+      geom_smooth(method = "loess", se = FALSE, linewidth = 1) +
+      facet_wrap(~Phase_lab, ncol = 3, scales = "free_x") +
+      scale_color_manual(values = pal_year, name = L$year) +
+      labs(title = title_txt,
+           x = paste0("VPD (", L$vpd_unit, ")"),
+           y = paste0("NEE (", L$flux_unit, ")")) +
+      theme_bw(base_size = 11) +
+      theme(panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey95"))
+  }
+  save_bilingual(make_nee_vpd_compare, "NEE_vs_VPD_compare_years", width = 12, height = 8)
+}
+
+# ----- Сравнительные графики NEE vs PPFD между годами -----
+nee_all_ppfd <- nee_all %>% filter(is.finite(PPFD), is.finite(NEE), PPFD > 10)
+if (nrow(nee_all_ppfd) > 30) {
+  make_nee_ppfd_compare <- function(lang) {
+    L <- LABELS[[lang]]
+    title_txt <- if (lang == "en") "NEE vs PPFD by phenophase" else "NEE vs PPFD по фенофазам"
+    ggplot(nee_all_ppfd, aes(x = PPFD, y = NEE, color = factor(Year))) +
+      geom_point(alpha = 0.2, size = 0.5) +
+      geom_smooth(method = "loess", se = FALSE, linewidth = 1) +
+      facet_wrap(~Phase_lab, ncol = 3, scales = "free_x") +
+      scale_color_manual(values = pal_year, name = L$year) +
+      labs(title = title_txt,
+           x = paste0("PPFD (", L$ppfd_unit, ")"),
+           y = paste0("NEE (", L$flux_unit, ")")) +
+      theme_bw(base_size = 11) +
+      theme(panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey95"))
+  }
+  save_bilingual(make_nee_ppfd_compare, "NEE_vs_PPFD_compare_years", width = 12, height = 8)
+}
+
+# ----- GPP vs VPD по фенофазам для каждого года -----
+for (yr in c(2013, 2016, 2023)) {
+  w_yr <- keep_main_phases(w_all) %>%
+    filter(Year == yr, is.finite(VPD), is.finite(GPP))
+
+  if (nrow(w_yr) > 10) {
+    p <- ggplot(w_yr, aes(x = VPD, y = GPP)) +
+      geom_point(alpha = 0.3, size = 0.8, color = pal_year[as.character(yr)]) +
+      geom_smooth(method = "loess", se = TRUE, color = "black", linewidth = 0.8) +
+      facet_wrap(~Phase_lab, ncol = 3, scales = "free_x") +
+      labs(title = paste("Зависимость GPP от VPD по фенофазам —", yr),
+           x = "VPD (kPa)", y = "GPP (μmol CO₂ m⁻² s⁻¹)") +
+      theme_bw(base_size = 11) +
+      theme(panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey95"))
+
+    print(p)
+    ggsave(paste0("GPP_vs_VPD_", yr, ".png"), p, width = 12, height = 8, dpi = 300, bg = "white")
+  }
+}
+
+# ----- GPP vs PPFD по фенофазам для каждого года -----
+for (yr in c(2013, 2016, 2023)) {
+  w_yr <- keep_main_phases(w_all) %>%
+    filter(Year == yr, is.finite(PPFD), is.finite(GPP), PPFD > 10)
+
+  if (nrow(w_yr) > 10) {
+    p <- ggplot(w_yr, aes(x = PPFD, y = GPP)) +
+      geom_point(alpha = 0.3, size = 0.8, color = pal_year[as.character(yr)]) +
+      geom_smooth(method = "loess", se = TRUE, color = "black", linewidth = 0.8) +
+      facet_wrap(~Phase_lab, ncol = 3, scales = "free_x") +
+      labs(title = paste("Зависимость GPP от PPFD по фенофазам —", yr),
+           subtitle = "Световые кривые фотосинтеза",
+           x = "PPFD (μmol m⁻² s⁻¹)", y = "GPP (μmol CO₂ m⁻² s⁻¹)") +
+      theme_bw(base_size = 11) +
+      theme(panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey95"))
+
+    print(p)
+    ggsave(paste0("GPP_vs_PPFD_", yr, ".png"), p, width = 12, height = 8, dpi = 300, bg = "white")
+  }
+}
+
+# ----- Сравнительные графики GPP vs VPD между годами -----
+w_all_vpd <- keep_main_phases(w_all) %>%
+  filter(is.finite(VPD), is.finite(GPP))
+if (nrow(w_all_vpd) > 30) {
+  make_gpp_vpd_compare <- function(lang) {
+    L <- LABELS[[lang]]
+    ggplot(w_all_vpd, aes(x = VPD, y = GPP, color = factor(Year))) +
+      geom_point(alpha = 0.2, size = 0.5) +
+      geom_smooth(method = "loess", se = FALSE, linewidth = 1) +
+      facet_wrap(~Phase_lab, ncol = 3, scales = "free") +
+      scale_color_manual(values = pal_year, name = L$year) +
+      labs(title = L$gpp_vs_vpd,
+           x = paste0("VPD (", L$vpd_unit, ")"),
+           y = paste0("GPP (", L$flux_unit, ")")) +
+      theme_bw(base_size = 11) +
+      theme(panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey95"))
+  }
+  save_bilingual(make_gpp_vpd_compare, "GPP_vs_VPD_compare_years", width = 12, height = 8)
+}
+
+# ----- Сравнительные графики GPP vs PPFD между годами -----
+w_all_ppfd <- keep_main_phases(w_all) %>%
+  filter(is.finite(PPFD), is.finite(GPP), PPFD > 10)
+if (nrow(w_all_ppfd) > 30) {
+  make_gpp_ppfd_compare <- function(lang) {
+    L <- LABELS[[lang]]
+    ggplot(w_all_ppfd, aes(x = PPFD, y = GPP, color = factor(Year))) +
+      geom_point(alpha = 0.2, size = 0.5) +
+      geom_smooth(method = "loess", se = FALSE, linewidth = 1) +
+      facet_wrap(~Phase_lab, ncol = 3, scales = "free") +
+      scale_color_manual(values = pal_year, name = L$year) +
+      labs(title = L$gpp_vs_ppfd,
+           subtitle = L$light_curves,
+           x = paste0("PPFD (", L$ppfd_unit, ")"),
+           y = paste0("GPP (", L$flux_unit, ")")) +
+      theme_bw(base_size = 11) +
+      theme(panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey95"))
+  }
+  save_bilingual(make_gpp_ppfd_compare, "GPP_vs_PPFD_compare_years", width = 12, height = 8)
+}
+
+cat("\n✓ Графики WUE, iWUE, GPP vs VPD, GPP vs PPFD сохранены (RU и EN версии)!\n")
+
+# ==============================================================================
+# РАСЧЕТ КУМУЛЯТИВНЫХ СУММ ЗА ВЕГЕТАЦИОННЫЙ ПЕРИОД
+# ==============================================================================
+
+cat("\n========================================\n")
+cat("РАСЧЕТ КУМУЛЯТИВНЫХ СУММ\n")
+cat("========================================\n\n")
+
+# Таблица границ вегетационного периода для каждого года
+season_bounds <- tibble(
+  Year = c(2013L, 2016L, 2023L),
+  Sowing     = as.Date(c(B2013$Sowing,     B2016$Sowing,     B2023$Sowing)),
+  Harvesting = as.Date(c(B2013$Harvesting,  B2016$Harvesting, B2023$Harvesting))
+)
+
+# ---------- Кумулятивные потоки из df_all ----------
+# df_all уже содержит объединённые df13+df16+df23, отфильтрованные по фазам.
+# Пересчёт: µmol CO2 m-2 s-1 → g C m-2 за полчаса (×1800 × 12 / 1e6)
+# NEE_daily = Reco_daily - GPP_daily (гарантия баланса)
+# Дополнительно считаем NEE_daily_raw = sum(NEE) для сравнения с данными
+
+cat("Расчет кумулятивных сумм по годам из df_all (только вегетационный период)...\n")
+
+coeff_gC <- 1800 * 12 / 1e6   # µmol CO2 m-2 s-1 → g C m-2 за 30 мин
+
+df_all_daily <- df_all %>%
+  filter(!is.na(Date), !is.na(Year)) %>%
+  # фильтр по вегетационному периоду
+  inner_join(season_bounds, by = "Year") %>%
+  filter(Date >= Sowing, Date <= Harvesting) %>%
+  mutate(
+    GPP_gC  = ifelse(is.finite(GPP),  GPP  * coeff_gC, 0),
+    Reco_gC = ifelse(is.finite(Reco), Reco * coeff_gC, 0),
+    NEE_gC  = ifelse(is.finite(NEE),  NEE  * coeff_gC, 0)
+  ) %>%
+  group_by(Year, Date, Sowing) %>%
+  summarise(
+    GPP_daily      = sum(GPP_gC,  na.rm = TRUE),
+    Reco_daily     = sum(Reco_gC, na.rm = TRUE),
+    NEE_daily_raw  = sum(NEE_gC,  na.rm = TRUE),   # сумма NEE «как есть» в данных
+    n_half_hours   = n(),
+    .groups = "drop"
+  ) %>%
+  # NEE_daily как производная = Reco - GPP (гарантирует баланс)
+  mutate(
+    NEE_daily        = Reco_daily - GPP_daily,
+    Days_from_sowing = as.numeric(Date - Sowing) + 1
+  )
+
+# Заполнение пропущенных дней нулями
+df_all_daily_complete <- df_all_daily %>%
+  group_by(Year) %>%
+  group_modify(~{
+    sow <- unique(.x$Sowing)
+    all_dates <- tibble(Date = seq(min(.x$Date), max(.x$Date), by = "1 day"))
+    all_dates %>%
+      left_join(.x %>% select(-Sowing), by = "Date") %>%
+      mutate(
+        GPP_daily      = ifelse(is.na(GPP_daily),      0, GPP_daily),
+        Reco_daily     = ifelse(is.na(Reco_daily),     0, Reco_daily),
+        NEE_daily_raw  = ifelse(is.na(NEE_daily_raw),  0, NEE_daily_raw),
+        NEE_daily      = Reco_daily - GPP_daily,
+        n_half_hours   = ifelse(is.na(n_half_hours),   0L, n_half_hours),
+        Days_from_sowing = as.numeric(Date - sow) + 1
+      )
+  }) %>%
+  ungroup()
+
+# Кумулятивные суммы
+df_all_cum <- df_all_daily_complete %>%
+  arrange(Year, Date) %>%
+  group_by(Year) %>%
+  mutate(
+    GPP_cum      = cumsum(GPP_daily),
+    Reco_cum     = cumsum(Reco_daily),
+    NEE_cum      = cumsum(NEE_daily),        # = Reco_cum - GPP_cum (по построению)
+    NEE_cum_raw  = cumsum(NEE_daily_raw)      # для сравнения с «сырым» NEE
+  ) %>%
+  ungroup() %>%
+  mutate(Year = factor(Year))
+
+cat("  Готово.\n")
+cat(sprintf("  Всего дней: %d (2013: %d, 2016: %d, 2023: %d)\n",
+            nrow(df_all_cum),
+            sum(df_all_cum$Year == "2013"),
+            sum(df_all_cum$Year == "2016"),
+            sum(df_all_cum$Year == "2023")))
+
+# ---------- GDD (суммы активных температур) — тоже из df_all ----------
+gdd_all <- df_all %>%
+  filter(!is.na(Date), !is.na(Year), !is.na(Tair)) %>%
+  inner_join(season_bounds, by = "Year") %>%
+  filter(Date >= Sowing, Date <= Harvesting) %>%
+  group_by(Year, Date, Sowing) %>%
+  summarise(Tair_mean = mean(Tair, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    GDD_daily = pmax(0, Tair_mean - 10),
+    Days_from_sowing = as.numeric(Date - Sowing) + 1
+  ) %>%
+  select(-Sowing) %>%
+  arrange(Year, Date) %>%
+  group_by(Year) %>%
+  mutate(GDD_cum = cumsum(GDD_daily)) %>%
+  ungroup() %>%
+  mutate(Year = factor(Year))
+
+# ==============================================================================
+# ИТОГОВЫЕ КУМУЛЯТИВНЫЕ СУММЫ ЗА ВЕГЕТАЦИОННЫЙ ПЕРИОД
+# ==============================================================================
+
+cat("\nИтоговые кумулятивные суммы за вегетационный период:\n\n")
+
+cumulative_summary <- df_all_cum %>%
+  arrange(Year, Date) %>%
+  group_by(Year) %>%
+  summarise(
+    Start_date = min(Date, na.rm = TRUE),
+    End_date = max(Date, na.rm = TRUE),
+    Days = as.numeric(End_date - Start_date) + 1,
+
+    GPP_total_gC  = dplyr::last(GPP_cum),
+    Reco_total_gC = dplyr::last(Reco_cum),
+    NEE_total_gC  = dplyr::last(NEE_cum),       # = Reco_total - GPP_total (по построению)
+    NEE_total_raw = dplyr::last(NEE_cum_raw),    # cumsum(NEE) «как есть» из данных
+
+    GPP_mean_daily  = mean(GPP_daily, na.rm = TRUE),
+    Reco_mean_daily = mean(Reco_daily, na.rm = TRUE),
+    NEE_mean_daily  = mean(NEE_daily, na.rm = TRUE),
+
+    .groups = "drop"
+  )
+
+# region agent log
+log_debug_agent(
+  hypothesisId = "H2_cumulative_fluxes",
+  location = "all_seasons_2026_Claudeversion.R:2562-2579",
+  message = "cumulative_summary across years",
+  data_fields = list(
+    n_years = nrow(cumulative_summary),
+    min_GPP_total = suppressWarnings(min(cumulative_summary$GPP_total_gC, na.rm = TRUE)),
+    max_GPP_total = suppressWarnings(max(cumulative_summary$GPP_total_gC, na.rm = TRUE)),
+    min_NEE_total = suppressWarnings(min(cumulative_summary$NEE_total_gC, na.rm = TRUE)),
+    max_NEE_total = suppressWarnings(max(cumulative_summary$NEE_total_gC, na.rm = TRUE))
+  )
+)
+# endregion
+
+print(cumulative_summary)
+
+# Проверка баланса: NEE_total == Reco_total - GPP_total
+cat("\nПроверка баланса NEE = Reco - GPP:\n")
+cumulative_summary %>%
+  mutate(
+    NEE_check   = Reco_total_gC - GPP_total_gC,
+    delta       = NEE_total_gC - NEE_check,        # должен быть 0 (по построению)
+    delta_raw   = NEE_total_raw - NEE_check,        # расхождение «сырого» NEE и баланса
+    ok_balance  = abs(delta) < 1e-6
+  ) %>%
+  select(Year, GPP_total_gC, Reco_total_gC, NEE_total_gC, NEE_total_raw,
+         NEE_check, delta, delta_raw, ok_balance) %>%
+  print()
+cat("  delta       = NEE(Reco-GPP) - (Reco-GPP)  — должен быть 0\n")
+cat("  delta_raw   = NEE(сырой)    - (Reco-GPP)  — показывает расхождение в исходных данных\n\n")
+
+# Добавим суммы активных температур
+gdd_summary <- gdd_all %>%
+  arrange(Year, Date) %>%
+  group_by(Year) %>%
+  summarise(
+    GDD_total = dplyr::last(GDD_cum),
+    GDD_mean = mean(GDD_daily, na.rm = TRUE),
+    Days_above_10C = sum(GDD_daily > 0, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+cat("\nСуммы активных температур (>10°C):\n\n")
+print(gdd_summary)
+
+# Объединенная таблица сравнения
+comparison_table <- cumulative_summary %>%
+  left_join(gdd_summary, by = "Year") %>%
+  select(Year, Days, GPP_total_gC, Reco_total_gC, NEE_total_gC, GDD_total, Days_above_10C)
+
+cat("\nПолная таблица сравнения:\n\n")
+print(comparison_table)
+
+# Сохранение таблицы
+write.csv(comparison_table, "cumulative_comparison_years_3.csv", row.names = FALSE)
+cat("\n✓ Таблица сохранена: cumulative_comparison_years.csv\n")
+
+# ==============================================================================
+# ГРАФИКИ КУМУЛЯТИВНЫХ СУММ
+# ==============================================================================
+
+cat("\nПостроение графиков кумулятивных сумм...\n")
+
+# Подготовка меток фаз в днях от сева для вертикальных линий
+phase_lines <- tibble(
+  Year = rep(c("2013", "2016", "2023"), each = 6),
+  Phase = rep(c("Всходы", "Кущение", "Выход в трубку", "Колошение", "Цветение", "Созревание"), 3),
+  Days = c(
+    # 2013
+    as.numeric(as.Date("2013-05-17") - as.Date("2013-05-14")) + 1,  # Всходы
+    as.numeric(as.Date("2013-06-03") - as.Date("2013-05-14")) + 1,  # Кущение
+    as.numeric(as.Date("2013-06-27") - as.Date("2013-05-14")) + 1,  # Выход в трубку
+    as.numeric(as.Date("2013-07-17") - as.Date("2013-05-14")) + 1,  # Колошение
+    as.numeric(as.Date("2013-07-28") - as.Date("2013-05-14")) + 1,  # Цветение
+    as.numeric(as.Date("2013-08-03") - as.Date("2013-05-14")) + 1,  # Созревание
+    # 2016
+    as.numeric(as.Date("2016-05-15") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-05-22") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-06-08") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-06-22") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-06-30") - as.Date("2016-05-11")) + 1,
+    as.numeric(as.Date("2016-08-12") - as.Date("2016-05-11")) + 1,
+    # 2023
+    as.numeric(as.Date("2023-05-26") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-06-07") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-06-29") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-07-14") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-07-20") - as.Date("2023-05-18")) + 1,
+    as.numeric(as.Date("2023-08-06") - as.Date("2023-05-18")) + 1
+  )
+)
+
+# График кумулятивного GPP
+p_gpp_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = GPP_cum, color = Year)) +
+  geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
+             linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
+  labs(title = "Кумулятивный GPP по дням вегетационного периода",
+       subtitle = "Вертикальные линии — начало фенофаз",
+       x = "Дни от посева", y = "Кумулятивный GPP (г C м⁻²)",
+       color = "Год") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+print(p_gpp_cum)
+ggsave("GPP_cumulative.png", p_gpp_cum, width = 10, height = 6, dpi = 300, bg = "white")
+
+# График кумулятивного Reco
+p_reco_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = Reco_cum, color = Year)) +
+  geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
+             linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
+  labs(title = "Кумулятивный Reco по дням вегетационного периода",
+       subtitle = "Вертикальные линии — начало фенофаз",
+       x = "Дни от посева", y = "Кумулятивный Reco (г C м⁻²)",
+       color = "Год") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+print(p_reco_cum)
+ggsave("Reco_cumulative.png", p_reco_cum, width = 10, height = 6, dpi = 300, bg = "white")
+
+# График кумулятивного NEE
+p_nee_cum <- ggplot(df_all_cum, aes(x = Days_from_sowing, y = NEE_cum, color = Year)) +
+  geom_hline(yintercept = 0, linetype = "solid", color = "grey50", linewidth = 0.5) +
+  geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
+             linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
+  labs(title = "Кумулятивный NEE по дням вегетационного периода",
+       subtitle = "Вертикальные линии — начало фенофаз",
+       x = "Дни от посева", y = "Кумулятивный NEE (г C м⁻²)",
+       color = "Год") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+print(p_nee_cum)
+ggsave("NEE_cumulative.png", p_nee_cum, width = 10, height = 6, dpi = 300, bg = "white")
+
+# График сумм активных температур
+p_gdd_cum <- ggplot(gdd_all, aes(x = Days_from_sowing, y = GDD_cum, color = Year)) +
+  geom_vline(data = phase_lines, aes(xintercept = Days, color = Year),
+             linetype = "dashed", alpha = 0.4, linewidth = 0.5) +
+  geom_line(linewidth = 1.2) +
+  scale_color_manual(values = c("2013" = "#1b9e77", "2016" = "#d95f02", "2023" = "#7570b3")) +
+  labs(title = "Кумулята сумм активных температур (>10°C)",
+       subtitle = "Вертикальные линии — начало фенофаз",
+       x = "Дни от посева", y = "Сумма активных температур (°C·день)",
+       color = "Год") +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+print(p_gdd_cum)
+ggsave("GDD_cumulative.png", p_gdd_cum, width = 10, height = 6, dpi = 300, bg = "white")
+
+cat("\n✓ Все графики сохранены!\n")
+cat("\n========================================\n")
+cat("РАСЧЕТЫ ЗАВЕРШЕНЫ\n")
+cat("========================================\n")
