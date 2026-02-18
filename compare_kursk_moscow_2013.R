@@ -115,6 +115,10 @@ if (all(is.na(kursk_dt))) {
   kursk_dt <- suppressWarnings(ymd_hm(raw_kursk$DateTime, tz = "UTC", quiet = TRUE))
 }
 
+# Сдвиг времени Курска на +3 часа (UTC → MSK)
+kursk_dt <- kursk_dt + hours(3)
+cat("  Время Курска сдвинуто на +3 ч (UTC → MSK)\n")
+
 df_kursk <- tibble(
   Site     = "Курск",
   datetime = kursk_dt,
@@ -132,12 +136,16 @@ df_kursk <- tibble(
 ) %>%
   filter(!is.na(datetime)) %>%
   mutate(
+    # GPP не может быть < 0: меняем знак отрицательных значений
+    GPP = ifelse(GPP < 0, -GPP, GPP),
     Phase = phase_by_bounds(Date, B_KURSK),
     Phase_lab = factor(as.character(Phase), levels = PHASE6_EN, labels = PHASE6_RU)
   )
 
+n_gpp_flipped <- sum(to_num(raw_kursk$GPP_DT_uStar) < 0, na.rm = TRUE)
 cat(sprintf("  Курск: %d строк, дат NA: %d, GPP NA: %d\n",
             nrow(df_kursk), sum(is.na(df_kursk$Date)), sum(is.na(df_kursk$GPP))))
+cat(sprintf("  GPP: знак изменён у %d отрицательных значений\n", n_gpp_flipped))
 cat(sprintf("  Диапазон дат: %s — %s\n",
             min(df_kursk$Date, na.rm = TRUE), max(df_kursk$Date, na.rm = TRUE)))
 
